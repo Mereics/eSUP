@@ -1,281 +1,335 @@
-# ESP32-S3 Super Mini + GC9A01 + Hall + MPU
+# Telecomanda ESP32-S3 pentru SUP electric
 
-Memoria proiectului / context complet sistem: [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md)
+Firmware PlatformIO pentru telecomanda si receptorul sistemului de propulsie al unui standup paddle electric. Documentul extins de lucru este in [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md).
 
-## Structura Firmware
+## Status curent
 
-Proiectul are doua firmware-uri PlatformIO separate:
+### Implementat si testat
+
+- Display rotund GC9A01 240x240 controlat prin LovyanGFX.
+- Dashboard randat intr-un sprite RGB565 de 240x240 si trimis ca frame complet, fara flicker vizibil.
+- Throttle analogic cu senzor Hall KY-035/49E.
+- Steering prin inclinarea telecomenzii, citita din accelerometrul MPU-6500/9250/9255.
+- Buton capacitiv TTP223 pentru ARM/DISARM.
+- Buton capacitiv TTP223 pentru cruise control.
+- Control bidirectional ESP-NOW intre transmitter si receiver.
+- Trimiterea throttle-ului si steering-ului in ArduPilot prin MAVLink `RC_CHANNELS_OVERRIDE`.
+- Comanda ARM/DISARM prin `MAV_CMD_COMPONENT_ARM_DISARM`.
+- Telemetrie MAVLink de baza trimisa inapoi la display: armed, viteza, heading, sateliti si bateria principala.
+- Failsafe local pe receiver pentru pierderea pachetelor de control.
+- Alimentarea placii transmitter de la o celula Li-ion prin pad-urile `B+` si `B-` a fost testata dupa reincarcarea bateriei.
+
+### Urmeaza sa fie facut
+
+- Cablarea masurarii bateriei telecomenzii pe `GPIO11` prin divizor rezistiv.
+- Calibrarea tensiunii ADC fata de un multimetru si verificarea estimarii procentului Li-ion.
+- Alegerea si montarea intrerupatorului magnetic waterproof pentru alimentarea telecomenzii.
+- Implementarea modului SPORT ca mod distinct; campul de protocol exista, dar transmitter-ul trimite momentan mereu modul `0`.
+- Implementarea heading hold si a butonului dedicat.
+- Implementarea reverse-ului ESC.
+- Masurarea RSSI real; campul exista in protocol, dar receiver-ul trimite momentan `0`.
+- Teste de raza, pierderi de pachete si comportament deasupra apei.
+- Validarea failsafe-ului complet, inclusiv comportamentul de ARM/DISARM la pierderea legaturii.
+- Teste cu carcasa finala waterproof si cu butoanele capacitive ude.
+
+## Structura proiectului
 
 ```text
-src/transmitter/   codul telecomenzii cu display, Hall, MPU si ARM touch
-src/receiver/      codul ESP32 receiver pentru MAVLink/UART cu FC-ul
+src/transmitter/             firmware telecomanda
+src/receiver/                firmware receptor conectat la flight controller
+src/common/remote_protocol.h protocolul comun ESP-NOW
+backup/                      testere si versiuni anterioare pastrate pentru referinta
+docs/PROJECT_CONTEXT.md      memoria completa a proiectului
 ```
 
-Upload transmitter:
+Proiectul foloseste doua environment-uri PlatformIO:
 
 ```powershell
+# Telecomanda
+pio run -e transmitter
 pio run -e transmitter -t upload
 pio device monitor -e transmitter
-```
 
-Upload receiver:
-
-```powershell
+# Receptor
+pio run -e receiver
 pio run -e receiver -t upload
 pio device monitor -e receiver
 ```
 
-Environment-ul default este `transmitter`, deci `pio run -t upload` va urca firmware-ul telecomenzii.
+Environment-ul implicit este `transmitter`.
 
-## Transmitter
+Configuratie comuna:
 
-Firmware-ul transmitter afiseaza dashboard-ul normal LovyanGFX si citeste live:
+- board PlatformIO: `esp32-s3-devkitm-1`
+- framework: Arduino
+- flash: 4 MB
+- USB mode: hardware USB
+- USB CDC on boot: activat
+- monitor: 115200 baud
 
-- throttle din senzorul Hall KY-035 / 49E pe `GPIO6`
-- steering din MPU-9250/6500/9255 pe axa Y, prin I2C
-- ARM touch pe `GPIO9`
-- cruise control touch pe `GPIO10`
-- tensiunea bateriei telecomenzii pe `GPIO11`, prin divizor rezistiv
-- telemetrie primita de la receiver prin ESP-NOW
+Dependinte:
 
-Transmitter trimite prin ESP-NOW, la aproximativ 25 Hz:
+- transmitter: `lovyan03/LovyanGFX`
+- receiver: `okalachev/MAVLink`
 
-- throttle `0..100`
-- steering `-100..100`
-- arm toggle counter
-- mode placeholder
+## Pinout transmitter
 
-Transmitter primeste de la receiver:
+| Functie | Modul/pin | ESP32-S3 Super Mini |
+| --- | --- | --- |
+| Display clock | GC9A01 SCL/SCK | GPIO1 |
+| Display data | GC9A01 SDA/MOSI | GPIO2 |
+| Display chip select | GC9A01 CS | GPIO4 |
+| Display reset | GC9A01 RST/RES | GPIO5 |
+| Display data/command | GC9A01 DC | GPIO12 |
+| Throttle analogic | KY-035/49E OUT/S | GPIO6 |
+| IMU data | MPU SDA | GPIO7 |
+| IMU clock | MPU SCL | GPIO8 |
+| ARM | TTP223 OUT/SIG | GPIO9 |
+| Cruise control | TTP223 OUT/SIG | GPIO10 |
+| Baterie TX, planificat | iesire divizor rezistiv | GPIO11 |
 
-- armed real citit din FC prin MAVLink
-- ground speed
-- heading
-- sateliti
-- baterie motor/main battery
-- link quality si RSSI
+Toate modulele au masa comuna. Display-ul, senzorul Hall, IMU-ul si modulele TTP223 sunt alimentate la 3.3V in prototipul actual.
 
-## Hall KY-035 / 49E
+`GPIO3` nu mai este folosit pentru display. DC a fost mutat pe `GPIO12`, deoarece `GPIO3` este strapping pin pe ESP32-S3 si poate afecta pornirea in anumite montaje.
+
+## Display GC9A01
+
+Configuratia LovyanGFX se afla in:
+
+- `src/transmitter/display_gc9a01.h`
+- `src/transmitter/display_gc9a01.cpp`
+
+Setari curente:
+
+- rezolutie: 240x240
+- SPI host: `SPI2_HOST`
+- SPI mode: 0
+- frecventa scriere: 40 MHz
+- framebuffer: sprite 16-bit, 240x240
+- update UI: la fiecare 80 ms, aproximativ 12.5 FPS
+
+Elementele dashboard-ului:
+
+- sus: steering `-100..100`
+- stanga: throttle comandat `0..100%`
+- dreapta: `PWR`, momentan aceeasi valoare ca throttle-ul comandat; nu este putere masurata
+- jos: procentul bateriei principale primit din MAVLink `SYS_STATUS`
+- centru: mod local, armed real din FC, heading, viteza, sateliti si procent baterie TX
+- deasupra centrului: link quality
+- marginea de jos: tensiunea bateriei TX; valoarea nu este valida pana la cablarea divizorului
+
+Daca nu soseste telemetrie timp de 1 secunda, link-ul este considerat inactiv, LQ devine 0, iar viteza, heading-ul, satelitii si bateria principala sunt afisate ca 0. Statusul `armed` ramane ultima valoare primita si trebuie tratat momentan ca informatie posibil invechita.
+
+## Throttle Hall KY-035 / 49E
 
 Pinout:
 
-| 49E / KY-035 | ESP32-S3 Super Mini |
+| KY-035 / 49E | ESP32-S3 |
 | --- | --- |
-| VCC / + | 3V3 |
-| GND / - | GND |
-| OUT / S | GPIO6 |
+| VCC/+ | 3V3 |
+| GND/- | GND |
+| OUT/S | GPIO6 |
 
-Modulul KY-035 / 49E merge alimentat la 3.3V. Fara camp magnetic puternic, output-ul ar trebui sa fie aproximativ la jumatatea alimentarii, deci in jur de 1.65V.
+Procesarea curenta:
 
-In codul curent, throttle-ul nu poate scadea sub `0%`. Orice valoare negativa fata de pozitia de repaus este mapata la `0%`, pentru ca spre FC nu trimitem throttle negativ.
+- ADC pe 12 biti, cu atenuare `ADC_11db`
+- fiecare citire este media a 16 esantioane
+- la boot se calibreaza pozitia eliberata timp de 700 ms
+- filtrare exponentiala: 88% valoarea anterioara, 12% citirea noua
+- deadband raw: 25
+- prag minim pentru invatarea maximului: 80 raw peste repaus
+- cursa minima folosita la mapare: 700 raw
+- valorile sub pozitia de repaus sunt limitate la 0%
 
-Stabilizare throttle:
-
-- la boot se face media senzorului Hall timp de aproximativ 700 ms
-- exista deadband raw pentru zgomot in jurul repausului
-- max-ul de trigger nu mai este invatat din zgomot mic, ci doar dupa un prag minim
-- pana la invatarea unei curse reale, se foloseste un span minim raw ca sa nu sara direct la 100%
-
-Comanda Serial Monitor:
+Maparea comenzii motorului:
 
 ```text
-t = recalibreaza throttle rest la valoarea curenta
+throttle citit <= 2% -> comanda 0%
+throttle citit > 2%  -> comanda mapata in intervalul 15..100%
 ```
 
-## MPU-9250 / MPU-6500 / MPU-9255
+Motorul a inceput fizic sa se roteasca in testele initiale in jurul comenzii de 20%. Valoarea minima software a ramas 15% pentru a pastra o zona de tranzitie.
 
-Pinout recomandat, avand deja `GPIO1-6` ocupate:
+## Steering MPU-6500/9250/9255
 
-| MPU pin | ESP32-S3 Super Mini | Observatii |
+Pinout:
+
+| MPU | ESP32-S3 | Observatie |
 | --- | --- | --- |
-| VCC | 3V3 | Logica sigura pentru ESP32 |
-| GND | GND | Masa comuna |
-| SCL | GPIO8 | I2C clock |
+| VCC | 3V3 | alimentare si logica 3.3V |
+| GND | GND | masa comuna |
 | SDA | GPIO7 | I2C data |
-| EDA | neconectat | I2C auxiliar, nefolosit |
-| ECL | neconectat | I2C auxiliar, nefolosit |
-| AD0 | GND | Adresa MPU `0x68` |
-| INT | neconectat momentan | Optional, poate merge pe GPIO9 mai tarziu |
-| NCS | 3V3 | Tine modulul in I2C, nu SPI |
-| FSYNC | GND sau neconectat | Neutilizat |
+| SCL | GPIO8 | I2C clock |
+| AD0 | GND | adresa `0x68` |
+| NCS | 3V3 | selecteaza I2C |
+| EDA/ECL | neconectat | magistrala auxiliara nefolosita |
+| INT | neconectat | polling, fara intrerupere |
+| FSYNC | GND sau neconectat | nefolosit |
 
-In cod folosim roll pentru steering. Pentru montajul curent:
+Montajul mecanic declarat in cod:
 
-- `Y` este in sus
-- `Z` este spre dreapta
-- `X` este spre fata telecomenzii
+- Y in sus
+- Z spre dreapta
+- X spre fata telecomenzii
 
-Roll-ul stanga/dreapta este calculat din `Y/Z`:
+Steering-ul este calculat din accelerometru, nu din viteza unghiulara a giroscopului:
 
 ```cpp
 atan2f(az, ay)
 ```
 
-Daca axa este buna dar sensul este invers, schimba:
+Setari curente:
 
 ```cpp
-constexpr bool STEERING_INVERT = true;
-```
-
-in:
-
-```cpp
-constexpr bool STEERING_INVERT = false;
-```
-
-Setari initiale steering:
-
-```cpp
-STEERING_MOUNT_OFFSET_DEG = 90.0
+STEERING_INVERT = true
+STEERING_MOUNT_OFFSET_DEG = 0.0
 STEERING_DEADZONE_DEG = 4.0
 STEERING_FULL_SCALE_DEG = 35.0
 ```
 
-Serial Monitor afiseaza si `ax`, `ay`, `az`, ca sa putem verifica orientarea reala a modulului daca este nevoie.
+Citirile cu magnitudinea acceleratiei in afara intervalului `0.55g..1.45g` sunt respinse. Dupa mai mult de 5 erori consecutive sau 300 ms fara o citire buna, IMU este marcata invalida si steering-ul revine la 0.
 
-Stabilizare IMU:
+## Butoane TTP223
 
-- I2C timeout este setat la 50 ms
-- citirile cu magnitudine accelerometru nerealista sunt respinse
-- dupa mai multe erori consecutive, steering-ul revine la 0 in loc sa ramana blocat full stanga/dreapta
+Ambele module sunt folosite in modul momentary active-high si au debounce software de 60 ms. Toggle-ul se face in firmware, nu in configuratia latch a modulului.
 
-## Buton ARM TTP223
+### ARM pe GPIO9
 
-Pinout:
+- prima atingere schimba cererea locala in ARM
+- urmatoarea atingere schimba cererea in DISARM
+- transmitter-ul incrementeaza `armToggleCount`
+- receiver-ul detecteaza schimbarea contorului si trimite `MAV_CMD_COMPONENT_ARM_DISARM`
+- display-ul arata starea reala primita ulterior din heartbeat-ul FC, nu doar cererea butonului
 
-| TTP223 | ESP32-S3 Super Mini |
-| --- | --- |
-| VCC | 3V3 |
-| GND | GND |
-| I/O / OUT / SIG | GPIO9 |
+### Cruise control pe GPIO10
 
-Modulul TTP223 merge la 2.5-5.5V, deci il alimentam la 3.3V. In modul default este de obicei momentary active-high: `LOW` fara atingere, `HIGH` cand este atins.
+- prima atingere salveaza comanda curenta de throttle si activeaza cruise
+- miscarile ulterioare ale triggerului sunt ignorate pentru comanda transmisa
+- urmatoarea atingere dezactiveaza cruise
+- pe display modul devine `CRZ`; in rest este `MAN`
+- cruise nu este dezactivat automat la pierderea legaturii, dar receiver-ul aplica throttle 1000 dupa timeout
 
-Pentru ARM folosim modul momentary si facem toggle in firmware:
+## ESP-NOW
 
-- prima atingere: `ARMED`
-- urmatoarea atingere: `DISARMED`
+Configuratie curenta:
 
-Nu seta modulul in latching/toggle hardware pentru acest test, altfel vom avea toggle in modul si toggle in cod in acelasi timp.
+- canal Wi-Fi: 1
+- control transmitter -> receiver: broadcast, necriptat
+- telemetrie receiver -> transmitter: unicast catre MAC-ul invatat din primul pachet valid
+- identificator protocol: `0x53555031` (`SUP1`)
+- control: la 40 ms, aproximativ 25 Hz
+- telemetrie: la 100 ms, aproximativ 10 Hz
 
-## Buton Cruise TTP223
+Pachetul de control contine:
 
-Pinout:
+- secventa si timpul local TX
+- throttle `0..100`
+- steering `-100..100`
+- contorul apasarilor ARM
+- mode; momentan este intotdeauna `0`
+- flags: IMU valid, ARM cerut, cruise activ
 
-| TTP223 | ESP32-S3 Super Mini |
-| --- | --- |
-| VCC | 3V3 |
-| GND | GND |
-| I/O / OUT / SIG | GPIO10 |
+Pachetul de telemetrie contine:
 
-Comportament:
+- armed
+- numar sateliti
+- procent baterie principala
+- procent baterie telecomanda; receiver-ul pune momentan valoarea fixa 100, iar display-ul foloseste citirea locala TX
+- link quality
+- RSSI; momentan valoarea este 0
+- tensiune baterie principala
+- ground speed in m/s
+- heading in grade
 
-- prima atingere activeaza cruise control
-- throttle-ul comandat ramane blocat la valoarea curenta
-- urmatoarea atingere dezactiveaza cruise control
-- cand cruise este activ, `MODE` pe display devine `CRZ`
+Link quality este calculat cumulativ din pachetele de control primite si discontinuitatile contorului de secventa. Implementarea actuala numara o discontinuitate ca un singur pachet ratat, indiferent de marimea saltului, deci LQ este orientativ si va trebui imbunatatit inainte de testele finale.
 
-## Mapare Throttle Motor
+## Receiver si MAVLink
 
-Motorul incepe fizic sa se invarta de la aproximativ `20%`, dar folosim comanda minima de `15%` ca sa existe putin deadzone mecanic/electric. Transmitter-ul trimite catre receiver throttle comandat, nu raw trigger:
+Pinout UART:
 
 ```text
-trigger <= 2%  -> comanda 0%
-trigger > 2%   -> comanda mapata 15..100%
+ESP32 receiver GPIO1 TX -> FC RX
+ESP32 receiver GPIO2 RX -> FC TX
+ESP32 receiver GND      -> FC GND
+baud                    = 115200
 ```
 
-Constante relevante in cod:
+Receiver-ul trimite:
+
+- heartbeat MAVLink la 1 Hz, identificat ca `MAV_TYPE_GCS`
+- `RC_CHANNELS_OVERRIDE` la 25 Hz
+- `MAV_CMD_COMPONENT_ARM_DISARM` la fiecare schimbare a contorului ARM
+
+Maparea RC actuala:
+
+| Canal | Valoare |
+| --- | --- |
+| CH1 | throttle `0..100` mapat la `1000..2000 us` |
+| CH2 | steering `-100..100` mapat la `1000..2000 us`, centru 1500 |
+| CH3 | 1500 fix |
+| CH4 | 1000 fix; ARM nu se face prin acest canal |
+| CH5 | 1000 fix; mode nu este implementat |
+| CH6-CH8 | 1500 fix |
+| CH9-CH18 | 0, ignorate |
+
+Mesaje MAVLink citite:
+
+- `HEARTBEAT`: status armed
+- `GPS_RAW_INT`: latitudine, longitudine, viteza GPS si sateliti
+- `VFR_HUD`: ground speed si heading; aceste valori suprascriu viteza/heading-ul cand mesajul soseste
+- `SYS_STATUS`: tensiune si procent baterie principala
+
+Failsafe receiver:
+
+- timeout control: 500 ms
+- dupa timeout, throttle devine 1000 us
+- dupa timeout, steering revine la 1500 us
+- implementarea curenta nu trimite automat DISARM
+
+## Bateria telecomenzii
+
+Alimentarea prin pad-urile `B+` si `B-` ale placii a functionat dupa reincarcarea celulei Li-ion. In testul cu bateria descarcata, rail-ul de 3.3V cobora in jur de 3.0V si placa nu pornea stabil.
+
+Masurarea tensiunii este pregatita in firmware, dar cablajul nu este finalizat. `GPIO11` neconectat produce valori ADC fara semnificatie, de exemplu aproximativ 0.02V.
+
+Schema planificata:
+
+```text
+B+ -> 100k -> GPIO11 -> 100k -> GND
+B- ---------------------------> GND comun
+```
+
+Cu rezistente egale, factorul divizorului este 2.0. La o baterie de 3.8V, pe GPIO11 trebuie sa existe aproximativ 1.9V. B+ nu se conecteaza direct la ADC.
+
+Pasii ramasi:
+
+1. Montarea divizorului.
+2. Compararea valorii afisate cu multimetrul.
+3. Ajustarea factorului `BATTERY_DIVIDER_RATIO`.
+4. Verificarea tabelului tensiune-procent pentru celula folosita si pentru sarcina reala.
+
+## Serial debug
+
+Transmitter-ul are momentan:
 
 ```cpp
-THROTTLE_INPUT_DEADBAND_PERCENT = 2
-MOTOR_START_PERCENT = 15
+SERIAL_DEBUG_ENABLED = false
 ```
 
-## Citire Baterie Telecomanda
+Prin urmare, nu initializeaza USB Serial si nu asteapta un monitor serial la boot. Comenzile `t` pentru recalibrarea repausului Hall si `s` pentru recalibrarea orientarii IMU exista in cod, dar sunt indisponibile pana cand flag-ul este pus pe `true` si firmware-ul este recompilat.
 
-ESP32-ul nu poate citi direct tensiunea de pe o celula Li-ion, pentru ca bateria plina are aproximativ `4.2V`, iar ADC-ul ESP32 trebuie tinut sub `3.3V`.
-
-Pinout recomandat cu divizor rezistiv:
-
-```text
-B+ baterie -> 100k -> GPIO11 -> 100k -> GND
-B- baterie -> GND comun
-```
-
-Cu doua rezistente egale, ESP32 vede jumatate din tensiunea bateriei. In cod este setat:
-
-```cpp
-BATTERY_DIVIDER_RATIO = 2.0
-```
-
-Display-ul afiseaza bateria telecomenzii ca `TX %` in centru si `TX x.xxV` jos. Daca folosesti alte valori pentru rezistente, schimba `BATTERY_DIVIDER_RATIO` cu factorul real al divizorului.
-
-Exemple:
-
-- `100k / 100k`: factor `2.0`, consum permanent aproximativ `21 uA` la baterie plina
-- `220k / 220k`: factor `2.0`, consum permanent mai mic, dar citirea ADC poate deveni putin mai zgomotoasa
-
-Comanda Serial Monitor:
-
-```text
-s = recalibreaza steering rest la orientarea curenta, suprascriind offset-ul fix
-```
-
-## Display GC9A01
-
-Pinout:
-
-| GC9A01 display | ESP32-S3 Super Mini |
-| --- | --- |
-| VCC / VIN | 3V3 |
-| GND | GND |
-| RST / RES | GPIO5 |
-| CS | GPIO4 |
-| DC | GPIO12 |
-| SDA / MOSI | GPIO2 |
-| SCL / SCK | GPIO1 |
-
-Display-ul foloseste LovyanGFX cu hardware SPI remapat la pinii de mai sus. UI-ul este randat intr-un sprite 240x240 pe 16-bit si apoi trimis ca full frame pentru update smooth.
-
-Codul de configurare display este separat in:
-
-- `src/display_gc9a01.h`
-- `src/display_gc9a01.cpp`
+Receiver-ul foloseste Serial Monitor la 115200 baud pentru diagnostic si afiseaza heartbeat-ul si telemetria primita de la FC.
 
 ## Backup-uri
 
-Backup dashboard LovyanGFX anterior:
+- `backup/dashboard_lovyangfx_mockup.cpp`: versiune anterioara a dashboard-ului
+- `backup/hall_sensor_test.cpp`: tester dedicat senzorului Hall
+- `backup/receiver_espnow_rtt_dashboard.cpp`: test anterior ESP-NOW RTT si dashboard web
 
-- `backup/dashboard_lovyangfx_mockup.cpp`
+## Observatii de siguranta
 
-Backup tester Hall:
-
-- `backup/hall_sensor_test.cpp`
-
-## Receiver
-
-Codul receiver curent este sketch-ul MAVLink care comunica prin UART cu flight controller-ul:
-
-- `src/receiver/main.cpp`
-
-Backup-ul vechiului test ESP-NOW RTT + dashboard web este in:
-
-- `backup/receiver_espnow_rtt_dashboard.cpp`
-
-Pinout curent receiver -> FC din cod:
-
-```text
-ESP32 GPIO1 TX -> FC RX
-ESP32 GPIO2 RX -> FC TX
-GND comun
-baud 115200
-```
-
-Codul trimite heartbeat MAVLink, `RC_CHANNELS_OVERRIDE` si citeste telemetrie de la FC.
-
-Receiver-ul primeste control prin ESP-NOW de la transmitter si:
-
-- mapeaza throttle `0..100` la PWM `1000..2000`
-- mapeaza steering `-100..100` la PWM `1000..2000`, centru `1500`
-- trimite `MAV_CMD_COMPONENT_ARM_DISARM` la fiecare apasare ARM primita
-- aplica failsafe local: daca nu primeste control >500 ms, throttle devine `1000`, steering `1500`
-- trimite inapoi telemetrie catre transmitter la aproximativ 10 Hz
+- Motorul de aproximativ 4.5 kW nu se testeaza cu elicea expusa sau cu placa neasigurata.
+- Failsafe-ul software actual trebuie validat independent inainte de teste pe apa.
+- O comanda DISARM confirmata de FC trebuie preferata unei simple schimbari locale de UI.
+- Reverse-ul nu este implementat si nu trebuie conectat pana la definirea tranzitiilor sigure intre forward, zero si reverse.
+- TTP223 trebuie testat prin carcasa finala, cu maini ude si apa pe suprafata, pentru a identifica false touch.
