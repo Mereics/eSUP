@@ -4,7 +4,7 @@
 
 constexpr int TFT_RST = 5;
 constexpr int TFT_CS = 4;
-constexpr int TFT_DC = 3;
+constexpr int TFT_DC = 12;
 constexpr int TFT_MOSI = 2; // Display pin is usually labeled SDA.
 constexpr int TFT_SCLK = 1; // Display pin is usually labeled SCL.
 

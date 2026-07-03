@@ -24,10 +24,11 @@ Firmware PlatformIO pentru telecomanda si receptorul sistemului de propulsie al 
 
 ### Urmeaza sa fie facut
 
-- Cablarea si calibrarea masurarii bateriei telecomenzii pe `GPIO13`.
+- Verificarea pinout-ului fizic al telecomenzii si mutarea display DC de pe GPIO12.
+- Mutarea masurarii bateriei telecomenzii pe `GPIO13` si cablarea divizorului rezistiv.
 - Calibrarea tensiunii ADC fata de un multimetru si verificarea estimarii procentului Li-ion.
-- Configurarea RCIN4 pentru course hold in ArduPilot si testarea modului.
-- Testarea reverse-ului ESC; logica transmitter/receiver este implementata.
+- Implementarea course/track hold dupa verificarea GPIO11 si integrarea ArduRover Guided.
+- Implementarea reverse-ului ESC.
 - Citirea bateriei principale prin divizor pe ESP32 receiver.
 - Upgrade ulterior la vESC pentru curent, tensiune si limitare configurabila.
 - Teste de raza, pierderi de pachete si comportament deasupra apei.
@@ -42,8 +43,6 @@ src/receiver/                firmware receptor conectat la flight controller
 src/common/remote_protocol.h protocolul comun ESP-NOW
 backup/                      testere si versiuni anterioare pastrate pentru referinta
 docs/PROJECT_CONTEXT.md      memoria completa a proiectului
-docs/COMMUNICATION_AND_CHANNEL_MAPPING.md
-                             maparea GPIO, ESP-NOW, RCIN si RCOUT
 ```
 
 Proiectul foloseste doua environment-uri PlatformIO:
@@ -82,21 +81,21 @@ Dependinte:
 | --- | --- | --- |
 | Display clock | GC9A01 SCL/SCK | GPIO1 |
 | Display data | GC9A01 SDA/MOSI | GPIO2 |
-| Display data/command | GC9A01 DC | GPIO3 |
 | Display chip select | GC9A01 CS | GPIO4 |
 | Display reset | GC9A01 RST/RES | GPIO5 |
+| Display data/command | GC9A01 DC | GPIO12 |
 | Throttle analogic | KY-035/49E OUT/S | GPIO6 |
 | IMU data | MPU SDA | GPIO7 |
 | IMU clock | MPU SCL | GPIO8 |
-| SPEED HOLD | TTP223 OUT/SIG | GPIO9 |
-| ARM/DISARM | TTP223 OUT/SIG | GPIO10 |
-| REVERSE | TTP223 OUT/SIG | GPIO11 |
-| COURSE HOLD | TTP223 OUT/SIG | GPIO12 |
-| Baterie TX planificata | intrare ADC prin divizor | GPIO13 |
+| ARM | TTP223 OUT/SIG | GPIO9 |
+| Cruise control | TTP223 OUT/SIG | GPIO10 |
+| Baterie TX in codul actual | intrare ADC neconectata | GPIO11 |
 
 Toate modulele au masa comuna. Display-ul, senzorul Hall, IMU-ul si modulele TTP223 sunt alimentate la 3.3V in prototipul actual.
 
-Pinout-ul de mai sus a fost confirmat fizic si este aplicat in firmware.
+`GPIO3` nu mai este folosit pentru display. DC a fost mutat pe `GPIO12`, deoarece `GPIO3` este strapping pin pe ESP32-S3 si poate afecta pornirea in anumite montaje.
+
+Acesta este pinout-ul firmware-ului care functioneaza acum. In hardware-ul final GPIO11 este rezervat pentru course hold, GPIO12 pentru reverse si GPIO13 pentru bateria TX. Codul nu va fi remapat pana la verificarea fizica a wiringului.
 
 ## Display GC9A01
 
@@ -199,7 +198,7 @@ Citirile cu magnitudinea acceleratiei in afara intervalului `0.55g..1.45g` sunt 
 
 Ambele module sunt folosite in modul momentary active-high si au debounce software de 60 ms. Toggle-ul se face in firmware, nu in configuratia latch a modulului.
 
-### ARM pe GPIO10
+### ARM pe GPIO9
 
 - ARM necesita mentinerea butonului timp de 2 secunde
 - daca sistemul este armed sau are ARM cerut, o apasare produce DISARM imediat
@@ -207,26 +206,14 @@ Ambele module sunt folosite in modul momentary active-high si au debounce softwa
 - receiver-ul detecteaza schimbarea contorului si trimite `MAV_CMD_COMPONENT_ARM_DISARM`
 - display-ul arata starea reala primita ulterior din heartbeat-ul FC, nu doar cererea butonului
 
-### SPEED HOLD pe GPIO9
+### Cruise control pe GPIO10
 
 - prima atingere salveaza comanda curenta de throttle si activeaza cruise
 - miscarile ulterioare ale triggerului sunt ignorate pentru comanda transmisa
 - urmatoarea atingere dezactiveaza cruise
 - pe display modul devine `CRZ`; in rest este `TILT`
 - cruise este anulat cand transmitter-ul intra in failsafe
-- SPEED HOLD este anulat automat la reverse
-
-### REVERSE pe GPIO11
-
-- toggle acceptat numai dupa o secunda continua cu triggerul la 0%
-- anuleaza SPEED HOLD
-- triggerul este trimis separat pe reverse throttle; forward ramane zero
-
-### COURSE HOLD pe GPIO12
-
-- toggle transmis prin ESP-NOW
-- receiver-ul genereaza RCIN4=1000 us OFF si RCIN4=2000 us ON
-- modul si maparea finala se configureaza in ArduPilot
+- anularea la reverse va fi adaugata odata cu implementarea reverse
 
 ## ESP-NOW
 
@@ -243,12 +230,11 @@ Configuratie curenta:
 Pachetul de control contine:
 
 - secventa si timpul local TX
-- forward throttle `0..100`, destinat RCIN2
-- reverse throttle `0..100`, destinat RCIN1
-- steering `-100..100`, destinat RCIN3
+- throttle `0..100`
+- steering `-100..100`
 - contorul apasarilor ARM
 - mode; momentan este intotdeauna `0`
-- flags: IMU valid, ARM cerut, SPEED HOLD, COURSE HOLD si REVERSE
+- flags: IMU valid, ARM cerut, cruise activ
 
 Pachetul de telemetrie contine:
 
@@ -285,15 +271,13 @@ Maparea RC actuala:
 
 | Canal | Valoare |
 | --- | --- |
-| CH1 / RCIN1 | reverse `0..100` mapat la `1000..2000 us` |
-| CH2 / RCIN2 | forward `0..100` mapat la `1000..2000 us` |
-| CH3 / RCIN3 | steering `-100..100` mapat la `1000..2000 us`, centru 1500 |
-| CH4 / RCIN4 | course hold: 1000 OFF, 2000 ON |
-| CH5 | 1000 fix; nefolosit |
+| CH1 | throttle `0..100` mapat la `1000..2000 us` |
+| CH2 | steering `-100..100` mapat la `1000..2000 us`, centru 1500 |
+| CH3 | 1500 fix |
+| CH4 | 1000 fix; ARM nu se face prin acest canal |
+| CH5 | 1000 fix; mode nu este implementat |
 | CH6-CH8 | 1500 fix |
 | CH9-CH18 | 0, ignorate |
-
-ArduPilot mapeaza separat RCIN-urile de mai sus catre RCOUT: PWM1 reverse ESC, PWM2 forward ESC, PWM3/PWM4 cele doua servouri. Detaliile complete sunt in `docs/COMMUNICATION_AND_CHANNEL_MAPPING.md`.
 
 Mesaje MAVLink citite:
 
@@ -314,7 +298,7 @@ Failsafe receiver:
 
 Alimentarea prin pad-urile `B+` si `B-` ale placii a functionat dupa reincarcarea celulei Li-ion. In testul cu bateria descarcata, rail-ul de 3.3V cobora in jur de 3.0V si placa nu pornea stabil.
 
-Masurarea tensiunii este mapata software pe GPIO13, dar monitorizarea ramane dezactivata prin `TX_BATTERY_MONITOR_ENABLED = false` pana la montarea si calibrarea divizorului.
+Masurarea tensiunii exista in firmware-ul vechi pe GPIO11, dar monitorizarea este dezactivata prin `TX_BATTERY_MONITOR_ENABLED = false` pana la verificarea wiringului. GPIO11 este rezervat fizic pentru course hold, iar bateria TX este planificata pe GPIO13.
 
 Schema planificata:
 
@@ -346,8 +330,6 @@ Receiver-ul foloseste Serial Monitor la 115200 baud pentru diagnostic si afiseaz
 
 ## Backup-uri
 
-- `backup/pre_gpio_rc_mapping_2026-07-03`: snapshot complet transmitter, receiver, protocol si documentatie inainte de maparea GPIO/RCIN
-- `backup/pre_safety_ui_2026-07-03`: snapshot complet inainte de ARM long-press, failsafe si UI final
 - `backup/dashboard_lovyangfx_mockup.cpp`: versiune anterioara a dashboard-ului
 - `backup/hall_sensor_test.cpp`: tester dedicat senzorului Hall
 - `backup/receiver_espnow_rtt_dashboard.cpp`: test anterior ESP-NOW RTT si dashboard web
@@ -357,5 +339,5 @@ Receiver-ul foloseste Serial Monitor la 115200 baud pentru diagnostic si afiseaz
 - Motorul de aproximativ 4.5 kW nu se testeaza cu elicea expusa sau cu placa neasigurata.
 - Failsafe-ul software actual trebuie validat independent inainte de teste pe apa.
 - O comanda DISARM confirmata de FC trebuie preferata unei simple schimbari locale de UI.
-- Logica reverse este implementata, dar testarea initiala trebuie facuta fara elice si cu verificarea RCIN/RCOUT in Mission Planner.
+- Reverse-ul nu este implementat si nu trebuie conectat pana la definirea tranzitiilor sigure intre forward, zero si reverse.
 - TTP223 trebuie testat prin carcasa finala, cu maini ude si apa pe suprafata, pentru a identifica false touch.

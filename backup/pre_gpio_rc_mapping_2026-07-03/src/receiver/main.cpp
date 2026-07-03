@@ -14,11 +14,11 @@ constexpr int8_t WIFI_MAX_TX_POWER = 78; // 19.5 dBm in 0.25 dBm units.
 
 HardwareSerial fcSerial(1);
 
-// RCIN trimise catre ArduPilot prin RC_CHANNELS_OVERRIDE.
-uint16_t ch_reverse = 1000;    // RCIN1
-uint16_t ch_forward = 1000;    // RCIN2
-uint16_t ch_steering = 1500;   // RCIN3
-uint16_t ch_courseHold = 1000; // RCIN4: 1000 off, 2000 on
+// Valori channels RC (1000-2000us)
+uint16_t ch_throttle = 1000;
+uint16_t ch_steering = 1500;
+uint16_t ch_arm      = 1000;
+uint16_t ch_mode     = 1000;
 
 unsigned long lastRCOverride    = 0;
 unsigned long lastHeartbeat     = 0;
@@ -90,10 +90,8 @@ void loop() {
 
   if (hasReceivedControl && millis() - lastControlPacket > CONTROL_FAILSAFE_MS &&
       !controlFailsafeActive) {
-    ch_reverse = 1000;
-    ch_forward = 1000;
+    ch_throttle = 1000;
     ch_steering = 1500;
-    ch_courseHold = 1000;
     lastArmRequested = false;
     controlFailsafeActive = true;
     sendArmCommand(false);
@@ -142,11 +140,11 @@ void sendRCOverride() {
     &msg,
     1,    // target system (FC)
     1,    // target component
-    ch_reverse,    // RCIN1: reverse throttle
-    ch_forward,    // RCIN2: forward throttle
-    ch_steering,   // RCIN3: steering
-    ch_courseHold, // RCIN4: course hold switch
-    1000,          // RCIN5: nefolosit
+    ch_throttle,  // ch1
+    ch_steering,  // ch2
+    1500,         // ch3
+    ch_arm,       // ch4  
+    ch_mode,      // ch5
     1500,         // ch6
     1500,         // ch7
     1500,         // ch8
@@ -232,18 +230,8 @@ void onControlRecv(const uint8_t *mac, const uint8_t *data, int len) {
   lastControlPacket = millis();
   hasReceivedControl = true;
 
-  uint8_t reverseThrottle = pkt.reverseThrottle;
-  uint8_t forwardThrottle = pkt.forwardThrottle;
-  if (reverseThrottle > 0 && forwardThrottle > 0) {
-    reverseThrottle = 0;
-    forwardThrottle = 0;
-  }
-
-  ch_reverse = mapThrottleToPwm(reverseThrottle);
-  ch_forward = mapThrottleToPwm(forwardThrottle);
+  ch_throttle = mapThrottleToPwm(pkt.throttle);
   ch_steering = mapSteeringToPwm(pkt.steering);
-  ch_courseHold =
-      (pkt.flags & CONTROL_FLAG_COURSE_HOLD_ACTIVE) != 0 ? 2000 : 1000;
 
   if (syncAfterFailsafe) {
     lastArmToggleCount = pkt.armToggleCount;
@@ -338,8 +326,6 @@ void receiveTelemetry() {
 void printTelemetry() {
   Serial.println("--- Telemetrie ---");
   Serial.print("Armed: ");       Serial.println(armed ? "DA" : "NU");
-  Serial.printf("RCIN1 REV:%u RCIN2 FWD:%u RCIN3 STR:%u RCIN4 CRS:%u\n",
-                ch_reverse, ch_forward, ch_steering, ch_courseHold);
   Serial.print("Speed: ");       Serial.print(gps_speed); Serial.println(" m/s");
   Serial.print("Heading: ");     Serial.println(gps_heading);
   Serial.print("Satellites: ");  Serial.println(gps_satellites);

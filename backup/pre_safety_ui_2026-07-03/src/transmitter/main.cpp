@@ -9,11 +9,9 @@
 constexpr int HALL_PIN = 6;
 constexpr int IMU_SDA_PIN = 7;
 constexpr int IMU_SCL_PIN = 8;
-constexpr int SPEED_HOLD_TOUCH_PIN = 9;
-constexpr int ARM_TOUCH_PIN = 10;
-constexpr int REVERSE_TOUCH_PIN = 11;
-constexpr int COURSE_HOLD_TOUCH_PIN = 12;
-constexpr int BATTERY_SENSE_PIN = 13;
+constexpr int ARM_TOUCH_PIN = 9;
+constexpr int CRUISE_TOUCH_PIN = 10;
+constexpr int BATTERY_SENSE_PIN = 11;
 constexpr uint8_t MPU_ADDR = 0x68;
 
 constexpr uint16_t ADC_MAX_VALUE = 4095;
@@ -30,15 +28,6 @@ constexpr uint8_t MOTOR_START_PERCENT = 15;
 constexpr float BATTERY_DIVIDER_RATIO = 2.0f;
 constexpr uint16_t BATTERY_SAMPLE_INTERVAL_MS = 250;
 constexpr bool SERIAL_DEBUG_ENABLED = false;
-constexpr bool TX_BATTERY_MONITOR_ENABLED = false;
-constexpr uint16_t ARM_HOLD_MS = 2000;
-constexpr uint16_t DIRECTION_CHANGE_NEUTRAL_MS = 1000;
-constexpr uint16_t TELEMETRY_FAILSAFE_MS = 500;
-constexpr uint16_t TELEMETRY_STALE_MS = 1000;
-constexpr uint16_t BATTERY_FAILSAFE_CONFIRM_MS = 500;
-constexpr float MAIN_BATTERY_DISARM_VOLTAGE = 21.0f;
-constexpr float TX_BATTERY_DISARM_VOLTAGE = 3.4f;
-constexpr int8_t WIFI_MAX_TX_POWER = 78; // 19.5 dBm in 0.25 dBm units.
 
 // Calibrare throttle. Pentru moment folosim rest auto la boot si min/max live.
 // Valorile negative fata de rest sunt fortate la 0.
@@ -72,8 +61,6 @@ uint8_t armToggleCount = 0;
 bool lastArmTouchReading = false;
 bool stableArmTouchState = false;
 uint32_t lastArmTouchChangeMs = 0;
-uint32_t armPressStartedMs = 0;
-bool armPressHandled = false;
 constexpr uint16_t TOUCH_DEBOUNCE_MS = 60;
 
 bool cruiseActive = false;
@@ -81,25 +68,10 @@ uint8_t cruiseThrottlePercent = 0;
 bool lastCruiseTouchReading = false;
 bool stableCruiseTouchState = false;
 uint32_t lastCruiseTouchChangeMs = 0;
-bool lastCourseTouchReading = false;
-bool stableCourseTouchState = false;
-uint32_t lastCourseTouchChangeMs = 0;
-bool lastReverseTouchReading = false;
-bool stableReverseTouchState = false;
-uint32_t lastReverseTouchChangeMs = 0;
-uint32_t throttleNeutralSinceMs = 0;
 
 float batteryVoltage = 0.0f;
 uint8_t transmitterBatteryPercent = 100;
 uint32_t lastBatterySampleMs = 0;
-uint32_t mainBatteryLowSinceMs = 0;
-uint32_t txBatteryLowSinceMs = 0;
-bool telemetryFailsafeActive = false;
-bool mainBatteryFailsafeActive = false;
-bool txBatteryFailsafeActive = false;
-bool courseHoldActive = false;
-bool reverseActive = false;
-float courseTargetHeading = 0.0f;
 
 uint16_t controlSeq = 0;
 uint16_t telemetrySeq = 0;
@@ -225,12 +197,6 @@ uint8_t motorMappedThrottle(uint8_t inputPercent) {
 }
 
 void updateThrottleCommand() {
-  if (telemetryFailsafeActive || mainBatteryFailsafeActive ||
-      txBatteryFailsafeActive) {
-    throttleCommandPercent = 0;
-    return;
-  }
-
   const uint8_t liveCommand = motorMappedThrottle(throttlePercent);
   throttleCommandPercent = cruiseActive ? cruiseThrottlePercent : liveCommand;
 }
@@ -406,94 +372,6 @@ void updateSteering() {
   steeringPercent = static_cast<int8_t>(steering);
 }
 
-bool telemetryIsFresh(uint32_t now, uint32_t timeoutMs) {
-  return lastTelemetryMs != 0 && now - lastTelemetryMs <= timeoutMs;
-}
-
-bool localFailsafeActive() {
-  return telemetryFailsafeActive || mainBatteryFailsafeActive ||
-         txBatteryFailsafeActive;
-}
-
-void requestArmState(bool requested, bool forceSend = false) {
-  if (armRequested == requested && !forceSend) {
-    return;
-  }
-
-  armRequested = requested;
-  armToggleCount++;
-}
-
-void enterLocalFailsafe(bool &failsafeFlag) {
-  if (failsafeFlag) {
-    return;
-  }
-
-  failsafeFlag = true;
-  cruiseActive = false;
-  courseHoldActive = false;
-  reverseActive = false;
-  requestArmState(false, true);
-}
-
-void clearRemoteTelemetry() {
-  armed = false;
-  telemetrySatellites = 0;
-  telemetryMainBattery = 0;
-  telemetryRemoteBattery = 0;
-  linkQuality = 0;
-  telemetryRssi = 0;
-  telemetryBatteryVoltage = 0.0f;
-  telemetrySpeed = 0.0f;
-  telemetryHeading = 0.0f;
-}
-
-void updateSafetyState(uint32_t now) {
-  const bool linkFresh = telemetryIsFresh(now, TELEMETRY_FAILSAFE_MS);
-
-  if (!linkFresh && now > TELEMETRY_FAILSAFE_MS) {
-    enterLocalFailsafe(telemetryFailsafeActive);
-  } else if (linkFresh) {
-    telemetryFailsafeActive = false;
-  }
-
-  const bool validMainBattery =
-      linkFresh && telemetryBatteryVoltage > 1.0f;
-  if (validMainBattery &&
-      telemetryBatteryVoltage <= MAIN_BATTERY_DISARM_VOLTAGE) {
-    if (mainBatteryLowSinceMs == 0) {
-      mainBatteryLowSinceMs = now;
-    } else if (now - mainBatteryLowSinceMs >= BATTERY_FAILSAFE_CONFIRM_MS) {
-      enterLocalFailsafe(mainBatteryFailsafeActive);
-    }
-  } else {
-    mainBatteryLowSinceMs = 0;
-    if (!validMainBattery ||
-        telemetryBatteryVoltage > MAIN_BATTERY_DISARM_VOLTAGE + 0.5f) {
-      mainBatteryFailsafeActive = false;
-    }
-  }
-
-  if (TX_BATTERY_MONITOR_ENABLED && batteryVoltage > 2.0f &&
-      batteryVoltage <= TX_BATTERY_DISARM_VOLTAGE) {
-    if (txBatteryLowSinceMs == 0) {
-      txBatteryLowSinceMs = now;
-    } else if (now - txBatteryLowSinceMs >= BATTERY_FAILSAFE_CONFIRM_MS) {
-      enterLocalFailsafe(txBatteryFailsafeActive);
-    }
-  } else {
-    txBatteryLowSinceMs = 0;
-    if (!TX_BATTERY_MONITOR_ENABLED ||
-        batteryVoltage > TX_BATTERY_DISARM_VOLTAGE + 0.1f) {
-      txBatteryFailsafeActive = false;
-    }
-  }
-
-  if (lastTelemetryMs != 0 && now - lastTelemetryMs > TELEMETRY_STALE_MS) {
-    clearRemoteTelemetry();
-  }
-}
-
 void updateArmButton() {
   const bool reading = digitalRead(ARM_TOUCH_PIN) == HIGH;
   const uint32_t now = millis();
@@ -508,33 +386,18 @@ void updateArmButton() {
   }
 
   if (reading == stableArmTouchState) {
-    if (stableArmTouchState && !armPressHandled &&
-        now - armPressStartedMs >= ARM_HOLD_MS) {
-      if (!localFailsafeActive()) {
-        requestArmState(true);
-      }
-      armPressHandled = true;
-    }
     return;
   }
 
   stableArmTouchState = reading;
   if (stableArmTouchState) {
-    armPressStartedMs = now;
-    armPressHandled = false;
-
-    if (armed || armRequested) {
-      requestArmState(false, true);
-      armPressHandled = true;
-    }
-  } else {
-    armPressStartedMs = 0;
-    armPressHandled = false;
+    armRequested = !armRequested;
+    armToggleCount++;
   }
 }
 
 void updateCruiseButton() {
-  const bool reading = digitalRead(SPEED_HOLD_TOUCH_PIN) == HIGH;
+  const bool reading = digitalRead(CRUISE_TOUCH_PIN) == HIGH;
   const uint32_t now = millis();
 
   if (reading != lastCruiseTouchReading) {
@@ -552,78 +415,11 @@ void updateCruiseButton() {
 
   stableCruiseTouchState = reading;
   if (stableCruiseTouchState) {
-    if (reverseActive && !cruiseActive) {
-      return;
-    }
-
     cruiseActive = !cruiseActive;
     if (cruiseActive) {
       cruiseThrottlePercent = motorMappedThrottle(throttlePercent);
     }
   }
-}
-
-bool touchPressed(int pin, bool &lastReading, bool &stableState,
-                  uint32_t &lastChangeMs) {
-  const bool reading = digitalRead(pin) == HIGH;
-  const uint32_t now = millis();
-
-  if (reading != lastReading) {
-    lastReading = reading;
-    lastChangeMs = now;
-  }
-
-  if (now - lastChangeMs < TOUCH_DEBOUNCE_MS || reading == stableState) {
-    return false;
-  }
-
-  stableState = reading;
-  return stableState;
-}
-
-void updateThrottleNeutralState(uint32_t now) {
-  if (throttlePercent <= THROTTLE_INPUT_DEADBAND_PERCENT) {
-    if (throttleNeutralSinceMs == 0) {
-      throttleNeutralSinceMs = now;
-    }
-  } else {
-    throttleNeutralSinceMs = 0;
-  }
-}
-
-void updateCourseHoldButton() {
-  if (!touchPressed(COURSE_HOLD_TOUCH_PIN, lastCourseTouchReading,
-                    stableCourseTouchState, lastCourseTouchChangeMs)) {
-    return;
-  }
-
-  if (localFailsafeActive()) {
-    return;
-  }
-
-  courseHoldActive = !courseHoldActive;
-  if (courseHoldActive) {
-    courseTargetHeading = telemetryHeading;
-  }
-}
-
-void updateReverseButton() {
-  if (!touchPressed(REVERSE_TOUCH_PIN, lastReverseTouchReading,
-                    stableReverseTouchState, lastReverseTouchChangeMs)) {
-    return;
-  }
-
-  const uint32_t now = millis();
-  const bool neutralReady =
-      throttleNeutralSinceMs != 0 &&
-      now - throttleNeutralSinceMs >= DIRECTION_CHANGE_NEUTRAL_MS;
-  if (localFailsafeActive() || !neutralReady) {
-    return;
-  }
-
-  reverseActive = !reverseActive;
-  cruiseActive = false;
-  cruiseThrottlePercent = 0;
 }
 
 void onTelemetryRecv(const uint8_t *mac, const uint8_t *data, int len) {
@@ -655,7 +451,6 @@ bool initEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
-  const esp_err_t powerResult = esp_wifi_set_max_tx_power(WIFI_MAX_TX_POWER);
 
   if (esp_now_init() != ESP_OK) {
     return false;
@@ -667,10 +462,7 @@ bool initEspNow() {
   memcpy(peer.peer_addr, RECEIVER_BROADCAST_MAC, 6);
   peer.channel = ESPNOW_CHANNEL;
   peer.encrypt = false;
-  const bool peerOk = esp_now_add_peer(&peer) == ESP_OK;
-  serialPrintf("WiFi TX power: %s (requested 19.5 dBm)\n",
-               powerResult == ESP_OK ? "OK" : "FAIL");
-  return powerResult == ESP_OK && peerOk;
+  return esp_now_add_peer(&peer) == ESP_OK;
 }
 
 void sendControlPacket() {
@@ -679,12 +471,8 @@ void sendControlPacket() {
   pkt.type = PKT_REMOTE_CONTROL;
   pkt.seq = controlSeq++;
   pkt.txMillis = millis();
-  const uint8_t safeThrottle =
-      localFailsafeActive() ? 0 : throttleCommandPercent;
-  pkt.forwardThrottle = reverseActive ? 0 : safeThrottle;
-  pkt.reverseThrottle = reverseActive ? safeThrottle : 0;
-  pkt.steering =
-      (localFailsafeActive() || courseHoldActive) ? 0 : steeringPercent;
+  pkt.throttle = throttleCommandPercent;
+  pkt.steering = steeringPercent;
   pkt.armToggleCount = armToggleCount;
   pkt.mode = 0;
   pkt.flags = 0;
@@ -696,12 +484,6 @@ void sendControlPacket() {
   }
   if (cruiseActive) {
     pkt.flags |= CONTROL_FLAG_CRUISE_ACTIVE;
-  }
-  if (courseHoldActive) {
-    pkt.flags |= CONTROL_FLAG_COURSE_HOLD_ACTIVE;
-  }
-  if (reverseActive) {
-    pkt.flags |= CONTROL_FLAG_REVERSE_ACTIVE;
   }
 
   esp_now_send(RECEIVER_BROADCAST_MAC, reinterpret_cast<uint8_t *>(&pkt),
@@ -816,73 +598,8 @@ void drawTurnGauge(int8_t steering) {
   drawCentered(value, 34, &fonts::Font0, rgb(140, 205, 255), bg);
 }
 
-float wrapHeadingError(float error) {
-  while (error > 180.0f) {
-    error -= 360.0f;
-  }
-  while (error < -180.0f) {
-    error += 360.0f;
-  }
-  return error;
-}
-
-void drawHeadingGauge(float headingDeg, bool holdActive, float targetHeading) {
-  constexpr float start = 58.0f;
-  constexpr float end = 122.0f;
-  constexpr float center = 90.0f;
-  constexpr int arcRadius = 108;
-  constexpr int arcThickness = 8;
-  constexpr int knobRadius = arcRadius - (arcThickness / 2);
-  constexpr int tickRadius = 92;
-
-  drawThickArc(start, end, arcRadius, arcThickness, track);
-  drawArcTicks(start, end, tickRadius, 7);
-
-  float markerAngle = start;
-  if (holdActive) {
-    const float deviation = constrain(
-        wrapHeadingError(headingDeg - targetHeading), -45.0f, 45.0f);
-    markerAngle = center + deviation * (end - center) / 45.0f;
-    drawThickArc(center, markerAngle, arcRadius, arcThickness, cyan);
-  } else {
-    const float normalized = fmodf(headingDeg + 360.0f, 360.0f);
-    markerAngle = start + normalized * (end - start) / 360.0f;
-  }
-
-  canvas.fillCircle(px(markerAngle, knobRadius), py(markerAngle, knobRadius), 5,
-                    rgb(235, 245, 255));
-  canvas.drawCircle(px(markerAngle, knobRadius), py(markerAngle, knobRadius), 6,
-                    rgb(75, 140, 210));
-
-  char value[12];
-  snprintf(value, sizeof(value), "%03u deg",
-           static_cast<uint16_t>(holdActive ? targetHeading : headingDeg) % 360);
-  drawCentered(value, 192, &fonts::Font0, textMain, bg);
-  drawCentered(holdActive ? "HLD" : "HDG", 207, &fonts::Font0, textDim, bg);
-}
-
-const char *currentModeLabel() {
-  if (localFailsafeActive()) {
-    return "FAIL";
-  }
-  if (reverseActive) {
-    return "REV";
-  }
-  if (cruiseActive && courseHoldActive) {
-    return "CRZ+HLD";
-  }
-  if (courseHoldActive) {
-    return "HLD";
-  }
-  if (cruiseActive) {
-    return "CRZ";
-  }
-  return "TILT";
-}
-
-void drawCenter(uint8_t satellites, uint16_t speedKmh, uint8_t lq,
-                bool linkActive, const char *flightMode, bool isArmed,
-                bool blinkOn) {
+void drawCenter(uint8_t satellites, uint8_t remoteBattery, uint16_t speedKmh,
+                const char *flightMode, bool armed, uint16_t headingDeg) {
   canvas.fillCircle(DISPLAY_CX, DISPLAY_CY, 66, panel);
   canvas.drawCircle(DISPLAY_CX, DISPLAY_CY, 66, rgb(55, 78, 86));
   canvas.drawCircle(DISPLAY_CX, DISPLAY_CY, 58, rgb(12, 25, 32));
@@ -896,58 +613,55 @@ void drawCenter(uint8_t satellites, uint16_t speedKmh, uint8_t lq,
   canvas.print("ARM");
 
   canvas.setTextColor(cyan, panel);
-  canvas.setCursor(77, 88);
+  canvas.setCursor(80, 88);
   canvas.print(flightMode);
-  canvas.setTextColor(isArmed ? red : green, panel);
+  canvas.setTextColor(armed ? red : green, panel);
   canvas.setCursor(135, 88);
-  canvas.print(isArmed ? "YES" : "NO");
+  canvas.print(armed ? "YES" : "NO");
 
   canvas.drawFastHLine(77, 105, 86, rgb(30, 52, 60));
 
-  const bool lqWarning = linkActive && lq < 90;
-  if (!lqWarning || blinkOn) {
-    char lqText[12];
-    snprintf(lqText, sizeof(lqText), "LQ %u%%", linkActive ? lq : 0);
-    drawCentered(lqText, 111, &fonts::Font0,
-                 linkActive ? (lqWarning ? red : green) : red, panel);
-  }
+  char heading[8];
+  snprintf(heading, sizeof(heading), "%03u", headingDeg % 360);
+  canvas.setTextColor(textDim, panel);
+  canvas.setCursor(82, 111);
+  canvas.print("HDG");
+  canvas.setTextColor(yellow, panel);
+  canvas.setCursor(112, 111);
+  canvas.print(heading);
+  canvas.setTextColor(textDim, panel);
+  canvas.setCursor(136, 111);
+  canvas.print("deg");
 
   char speed[8];
   snprintf(speed, sizeof(speed), "%u", speedKmh);
-  drawCentered(speed, 126, &fonts::Font7, textMain, panel);
-  drawCentered("km/h", 167, &fonts::Font0, textDim, panel);
+  drawCentered(speed, 130, &fonts::Font7, textMain, panel);
+  drawCentered("km/h", 171, &fonts::Font0, textDim, panel);
 
   canvas.setFont(&fonts::Font0);
   canvas.setTextColor(textDim, panel);
-  canvas.setCursor(77, 181);
+  canvas.setCursor(79, 181);
   canvas.printf("SAT %02u", satellites);
-  canvas.setCursor(123, 181);
-  if (TX_BATTERY_MONITOR_ENABLED) {
-    const bool txWarning = batteryVoltage <= 3.7f;
-    if (!txWarning || blinkOn) {
-      canvas.setTextColor(txWarning ? red : textDim, panel);
-      canvas.printf("TX %.1fV", batteryVoltage);
-    }
-  } else {
-    canvas.print("TX --.-V");
-  }
+  canvas.setCursor(125, 181);
+  canvas.printf("TX %02u%%", remoteBattery);
 }
 
 void drawDashboard() {
   constexpr float thrStart = 144.0f;
   constexpr float thrEnd = 216.0f;
-  constexpr float batStart = 36.0f;
-  constexpr float batEnd = -36.0f;
+  constexpr float pwrStart = 36.0f;
+  constexpr float pwrEnd = -36.0f;
+  constexpr float batStart = 58.0f;
+  constexpr float batEnd = 122.0f;
 
-  const uint32_t now = millis();
-  const bool blinkOn = (now / 500U) % 2U == 0;
-  const bool linkActive = telemetryIsFresh(now, TELEMETRY_STALE_MS);
+  const uint8_t powerPercent = throttleCommandPercent;
+  const bool linkActive = millis() - lastTelemetryMs < 1000;
   const uint8_t mainBattery = linkActive ? telemetryMainBattery : 0;
+  const uint8_t remoteBattery = transmitterBatteryPercent;
   const uint8_t satellites = linkActive ? telemetrySatellites : 0;
   const uint16_t speed = linkActive ? static_cast<uint16_t>(telemetrySpeed * 3.6f + 0.5f) : 0;
   const uint16_t heading = linkActive ? static_cast<uint16_t>(telemetryHeading + 0.5f) : 0;
-  const float mainVoltage = linkActive ? telemetryBatteryVoltage : 0.0f;
-  const char *flightMode = currentModeLabel();
+  const char *flightMode = cruiseActive ? "CRZ" : "MAN";
 
   canvas.fillScreen(bg);
   canvas.fillCircle(DISPLAY_CX, DISPLAY_CY, 108, rgb(3, 7, 10));
@@ -956,36 +670,37 @@ void drawDashboard() {
 
   drawTurnGauge(steeringPercent);
   drawArcGauge(thrStart, thrEnd, throttleCommandPercent, green);
-  drawArcGauge(batStart, batEnd, mainBattery, batteryColor(mainBattery));
-  drawHeadingGauge(heading, courseHoldActive, courseTargetHeading);
+  drawArcGauge(pwrStart, pwrEnd, powerPercent, orange);
+  drawArcGauge(batStart, batEnd, mainBattery, batteryColor(mainBattery), true);
 
   drawLabel("TURN", 105, 20);
   drawLabel("THR", 30, 112);
-  drawLabel("BAT", 184, 112);
+  drawLabel("PWR", 184, 112);
+  drawLabel("BAT", 105, 207);
 
   canvas.setFont(&fonts::Font0);
   canvas.setTextSize(1);
   canvas.setTextColor(textMain, bg);
   canvas.setCursor(34, 130);
   canvas.printf("%u%%", throttleCommandPercent);
-  const bool mainBatteryWarning =
-      linkActive && mainVoltage > 1.0f && mainVoltage <= 25.6f;
-  if (!mainBatteryWarning || blinkOn) {
-    const uint16_t mainBatteryTextColor =
-        mainVoltage <= 24.0f ? red : (mainBatteryWarning ? orange : textMain);
-    canvas.setTextColor(mainBatteryTextColor, bg);
-    canvas.setCursor(188, 130);
-    canvas.printf("%u%%", mainBattery);
-    canvas.setCursor(188, 143);
-    if (linkActive && mainVoltage > 1.0f) {
-      canvas.printf("%.1fV", mainVoltage);
-    } else {
-      canvas.print("--.-V");
-    }
-  }
+  canvas.setCursor(184, 130);
+  canvas.printf("%u%%", powerPercent);
 
-  drawCenter(satellites, speed, linkQuality, linkActive, flightMode, armed,
-             blinkOn);
+  char mainBatteryText[8];
+  snprintf(mainBatteryText, sizeof(mainBatteryText), "%u%%", mainBattery);
+  drawCentered(mainBatteryText, 192, &fonts::Font0, textMain, bg);
+
+  drawCenter(satellites, remoteBattery, speed, flightMode, armed, heading);
+
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextSize(1);
+  canvas.setTextColor(linkActive ? green : red, bg);
+  canvas.setCursor(93, 52);
+  canvas.printf("LQ %u%%", linkActive ? linkQuality : 0);
+
+  canvas.setTextColor(textDim, bg);
+  canvas.setCursor(80, 226);
+  canvas.printf("TX %.2fV", batteryVoltage);
 
   canvas.pushSprite(0, 0);
 }
@@ -1034,13 +749,9 @@ void setup() {
 
   analogReadResolution(12);
   analogSetPinAttenuation(HALL_PIN, ADC_11db);
-  if (TX_BATTERY_MONITOR_ENABLED) {
-    analogSetPinAttenuation(BATTERY_SENSE_PIN, ADC_11db);
-  }
+  analogSetPinAttenuation(BATTERY_SENSE_PIN, ADC_11db);
   pinMode(ARM_TOUCH_PIN, INPUT);
-  pinMode(SPEED_HOLD_TOUCH_PIN, INPUT);
-  pinMode(COURSE_HOLD_TOUCH_PIN, INPUT);
-  pinMode(REVERSE_TOUCH_PIN, INPUT);
+  pinMode(CRUISE_TOUCH_PIN, INPUT);
 
   if (!initDisplay()) {
     serialPrintln("Display sprite allocation failed.");
@@ -1054,10 +765,7 @@ void setup() {
   hallFilteredRaw = hallReleasedRaw;
   hallMaxRaw = hallReleasedRaw + HALL_MIN_SPAN_RAW;
   hallMaxLearned = false;
-  throttleNeutralSinceMs = millis();
-  if (TX_BATTERY_MONITOR_ENABLED) {
-    updateBatteryVoltage();
-  }
+  updateBatteryVoltage();
 
   imuOk = initMpu();
   imuRollOffsetDeg = STEERING_MOUNT_OFFSET_DEG;
@@ -1068,9 +776,7 @@ void setup() {
   serialPrintf("MPU SDA -> GPIO%d, SCL -> GPIO%d, addr 0x%02X\n",
                 IMU_SDA_PIN, IMU_SCL_PIN, MPU_ADDR);
   serialPrintf("ARM touch OUT -> GPIO%d\n", ARM_TOUCH_PIN);
-  serialPrintf("SPEED HOLD touch OUT -> GPIO%d\n", SPEED_HOLD_TOUCH_PIN);
-  serialPrintf("COURSE HOLD touch OUT -> GPIO%d\n", COURSE_HOLD_TOUCH_PIN);
-  serialPrintf("REVERSE touch OUT -> GPIO%d\n", REVERSE_TOUCH_PIN);
+  serialPrintf("CRUISE touch OUT -> GPIO%d\n", CRUISE_TOUCH_PIN);
   serialPrintf("Battery sense -> GPIO%d\n", BATTERY_SENSE_PIN);
   serialPrintf("ESP-NOW: %s\n", espNowOk ? "OK" : "FAIL");
   serialPrintln("Comenzi: t=throttle rest, s=steering rest, h=help");
@@ -1082,23 +788,18 @@ void loop() {
 
   const uint32_t now = millis();
   handleSerialCommands();
-  updateSafetyState(now);
 
   if (now - lastSensor >= SENSOR_INTERVAL_MS) {
     lastSensor = now;
     updateThrottle();
-    updateThrottleNeutralState(now);
     updateThrottleCommand();
     updateSteering();
     updateArmButton();
     updateCruiseButton();
-    updateCourseHoldButton();
-    updateReverseButton();
     updateThrottleCommand();
   }
 
-  if (TX_BATTERY_MONITOR_ENABLED &&
-      now - lastBatterySampleMs >= BATTERY_SAMPLE_INTERVAL_MS) {
+  if (now - lastBatterySampleMs >= BATTERY_SAMPLE_INTERVAL_MS) {
     lastBatterySampleMs = now;
     updateBatteryVoltage();
   }

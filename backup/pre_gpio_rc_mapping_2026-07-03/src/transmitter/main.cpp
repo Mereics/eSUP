@@ -9,11 +9,9 @@
 constexpr int HALL_PIN = 6;
 constexpr int IMU_SDA_PIN = 7;
 constexpr int IMU_SCL_PIN = 8;
-constexpr int SPEED_HOLD_TOUCH_PIN = 9;
-constexpr int ARM_TOUCH_PIN = 10;
-constexpr int REVERSE_TOUCH_PIN = 11;
-constexpr int COURSE_HOLD_TOUCH_PIN = 12;
-constexpr int BATTERY_SENSE_PIN = 13;
+constexpr int ARM_TOUCH_PIN = 9;
+constexpr int CRUISE_TOUCH_PIN = 10;
+constexpr int BATTERY_SENSE_PIN = 11;
 constexpr uint8_t MPU_ADDR = 0x68;
 
 constexpr uint16_t ADC_MAX_VALUE = 4095;
@@ -32,7 +30,6 @@ constexpr uint16_t BATTERY_SAMPLE_INTERVAL_MS = 250;
 constexpr bool SERIAL_DEBUG_ENABLED = false;
 constexpr bool TX_BATTERY_MONITOR_ENABLED = false;
 constexpr uint16_t ARM_HOLD_MS = 2000;
-constexpr uint16_t DIRECTION_CHANGE_NEUTRAL_MS = 1000;
 constexpr uint16_t TELEMETRY_FAILSAFE_MS = 500;
 constexpr uint16_t TELEMETRY_STALE_MS = 1000;
 constexpr uint16_t BATTERY_FAILSAFE_CONFIRM_MS = 500;
@@ -81,13 +78,6 @@ uint8_t cruiseThrottlePercent = 0;
 bool lastCruiseTouchReading = false;
 bool stableCruiseTouchState = false;
 uint32_t lastCruiseTouchChangeMs = 0;
-bool lastCourseTouchReading = false;
-bool stableCourseTouchState = false;
-uint32_t lastCourseTouchChangeMs = 0;
-bool lastReverseTouchReading = false;
-bool stableReverseTouchState = false;
-uint32_t lastReverseTouchChangeMs = 0;
-uint32_t throttleNeutralSinceMs = 0;
 
 float batteryVoltage = 0.0f;
 uint8_t transmitterBatteryPercent = 100;
@@ -534,7 +524,7 @@ void updateArmButton() {
 }
 
 void updateCruiseButton() {
-  const bool reading = digitalRead(SPEED_HOLD_TOUCH_PIN) == HIGH;
+  const bool reading = digitalRead(CRUISE_TOUCH_PIN) == HIGH;
   const uint32_t now = millis();
 
   if (reading != lastCruiseTouchReading) {
@@ -552,78 +542,11 @@ void updateCruiseButton() {
 
   stableCruiseTouchState = reading;
   if (stableCruiseTouchState) {
-    if (reverseActive && !cruiseActive) {
-      return;
-    }
-
     cruiseActive = !cruiseActive;
     if (cruiseActive) {
       cruiseThrottlePercent = motorMappedThrottle(throttlePercent);
     }
   }
-}
-
-bool touchPressed(int pin, bool &lastReading, bool &stableState,
-                  uint32_t &lastChangeMs) {
-  const bool reading = digitalRead(pin) == HIGH;
-  const uint32_t now = millis();
-
-  if (reading != lastReading) {
-    lastReading = reading;
-    lastChangeMs = now;
-  }
-
-  if (now - lastChangeMs < TOUCH_DEBOUNCE_MS || reading == stableState) {
-    return false;
-  }
-
-  stableState = reading;
-  return stableState;
-}
-
-void updateThrottleNeutralState(uint32_t now) {
-  if (throttlePercent <= THROTTLE_INPUT_DEADBAND_PERCENT) {
-    if (throttleNeutralSinceMs == 0) {
-      throttleNeutralSinceMs = now;
-    }
-  } else {
-    throttleNeutralSinceMs = 0;
-  }
-}
-
-void updateCourseHoldButton() {
-  if (!touchPressed(COURSE_HOLD_TOUCH_PIN, lastCourseTouchReading,
-                    stableCourseTouchState, lastCourseTouchChangeMs)) {
-    return;
-  }
-
-  if (localFailsafeActive()) {
-    return;
-  }
-
-  courseHoldActive = !courseHoldActive;
-  if (courseHoldActive) {
-    courseTargetHeading = telemetryHeading;
-  }
-}
-
-void updateReverseButton() {
-  if (!touchPressed(REVERSE_TOUCH_PIN, lastReverseTouchReading,
-                    stableReverseTouchState, lastReverseTouchChangeMs)) {
-    return;
-  }
-
-  const uint32_t now = millis();
-  const bool neutralReady =
-      throttleNeutralSinceMs != 0 &&
-      now - throttleNeutralSinceMs >= DIRECTION_CHANGE_NEUTRAL_MS;
-  if (localFailsafeActive() || !neutralReady) {
-    return;
-  }
-
-  reverseActive = !reverseActive;
-  cruiseActive = false;
-  cruiseThrottlePercent = 0;
 }
 
 void onTelemetryRecv(const uint8_t *mac, const uint8_t *data, int len) {
@@ -679,12 +602,8 @@ void sendControlPacket() {
   pkt.type = PKT_REMOTE_CONTROL;
   pkt.seq = controlSeq++;
   pkt.txMillis = millis();
-  const uint8_t safeThrottle =
-      localFailsafeActive() ? 0 : throttleCommandPercent;
-  pkt.forwardThrottle = reverseActive ? 0 : safeThrottle;
-  pkt.reverseThrottle = reverseActive ? safeThrottle : 0;
-  pkt.steering =
-      (localFailsafeActive() || courseHoldActive) ? 0 : steeringPercent;
+  pkt.throttle = localFailsafeActive() ? 0 : throttleCommandPercent;
+  pkt.steering = localFailsafeActive() ? 0 : steeringPercent;
   pkt.armToggleCount = armToggleCount;
   pkt.mode = 0;
   pkt.flags = 0;
@@ -696,12 +615,6 @@ void sendControlPacket() {
   }
   if (cruiseActive) {
     pkt.flags |= CONTROL_FLAG_CRUISE_ACTIVE;
-  }
-  if (courseHoldActive) {
-    pkt.flags |= CONTROL_FLAG_COURSE_HOLD_ACTIVE;
-  }
-  if (reverseActive) {
-    pkt.flags |= CONTROL_FLAG_REVERSE_ACTIVE;
   }
 
   esp_now_send(RECEIVER_BROADCAST_MAC, reinterpret_cast<uint8_t *>(&pkt),
@@ -1034,13 +947,9 @@ void setup() {
 
   analogReadResolution(12);
   analogSetPinAttenuation(HALL_PIN, ADC_11db);
-  if (TX_BATTERY_MONITOR_ENABLED) {
-    analogSetPinAttenuation(BATTERY_SENSE_PIN, ADC_11db);
-  }
+  analogSetPinAttenuation(BATTERY_SENSE_PIN, ADC_11db);
   pinMode(ARM_TOUCH_PIN, INPUT);
-  pinMode(SPEED_HOLD_TOUCH_PIN, INPUT);
-  pinMode(COURSE_HOLD_TOUCH_PIN, INPUT);
-  pinMode(REVERSE_TOUCH_PIN, INPUT);
+  pinMode(CRUISE_TOUCH_PIN, INPUT);
 
   if (!initDisplay()) {
     serialPrintln("Display sprite allocation failed.");
@@ -1054,10 +963,7 @@ void setup() {
   hallFilteredRaw = hallReleasedRaw;
   hallMaxRaw = hallReleasedRaw + HALL_MIN_SPAN_RAW;
   hallMaxLearned = false;
-  throttleNeutralSinceMs = millis();
-  if (TX_BATTERY_MONITOR_ENABLED) {
-    updateBatteryVoltage();
-  }
+  updateBatteryVoltage();
 
   imuOk = initMpu();
   imuRollOffsetDeg = STEERING_MOUNT_OFFSET_DEG;
@@ -1068,9 +974,7 @@ void setup() {
   serialPrintf("MPU SDA -> GPIO%d, SCL -> GPIO%d, addr 0x%02X\n",
                 IMU_SDA_PIN, IMU_SCL_PIN, MPU_ADDR);
   serialPrintf("ARM touch OUT -> GPIO%d\n", ARM_TOUCH_PIN);
-  serialPrintf("SPEED HOLD touch OUT -> GPIO%d\n", SPEED_HOLD_TOUCH_PIN);
-  serialPrintf("COURSE HOLD touch OUT -> GPIO%d\n", COURSE_HOLD_TOUCH_PIN);
-  serialPrintf("REVERSE touch OUT -> GPIO%d\n", REVERSE_TOUCH_PIN);
+  serialPrintf("CRUISE touch OUT -> GPIO%d\n", CRUISE_TOUCH_PIN);
   serialPrintf("Battery sense -> GPIO%d\n", BATTERY_SENSE_PIN);
   serialPrintf("ESP-NOW: %s\n", espNowOk ? "OK" : "FAIL");
   serialPrintln("Comenzi: t=throttle rest, s=steering rest, h=help");
@@ -1087,18 +991,14 @@ void loop() {
   if (now - lastSensor >= SENSOR_INTERVAL_MS) {
     lastSensor = now;
     updateThrottle();
-    updateThrottleNeutralState(now);
     updateThrottleCommand();
     updateSteering();
     updateArmButton();
     updateCruiseButton();
-    updateCourseHoldButton();
-    updateReverseButton();
     updateThrottleCommand();
   }
 
-  if (TX_BATTERY_MONITOR_ENABLED &&
-      now - lastBatterySampleMs >= BATTERY_SAMPLE_INTERVAL_MS) {
+  if (now - lastBatterySampleMs >= BATTERY_SAMPLE_INTERVAL_MS) {
     lastBatterySampleMs = now;
     updateBatteryVoltage();
   }

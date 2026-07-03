@@ -2,8 +2,6 @@
 
 Acest document este memoria de lucru a proiectului. Îl actualizăm de fiecare dată când se schimbă hardware-ul, cablajul, deciziile de protocol, testele sau statusul.
 
-Maparea tehnică GPIO -> ESP-NOW -> RCIN -> RCOUT este documentată separat în `docs/COMMUNICATION_AND_CHANNEL_MAPPING.md`.
-
 ## Scop
 
 Construim un sistem electric de propulsie și control pentru o placă de standup paddle. Obiectivul nu este doar demonstrarea unui prototip de laborator: sistemul final trebuie să fie complet funcțional și utilizabil în condiții reale pe apă.
@@ -202,13 +200,15 @@ Pinout display actual:
 | --- | --- |
 | VCC / VIN | 3V3 |
 | GND | GND |
-| RST / RES | GPIO5 |
-| CS | GPIO4 |
-| DC | GPIO3 |
-| SDA / MOSI | GPIO2 |
-| SCL / SCK | GPIO1 |
+| RST / RES | unul dintre GPIO1..GPIO5, de stabilit |
+| CS | unul dintre GPIO1..GPIO5, de stabilit |
+| DC | unul dintre GPIO1..GPIO5, de stabilit |
+| SDA / MOSI | unul dintre GPIO1..GPIO5, de stabilit |
+| SCL / SCK | unul dintre GPIO1..GPIO5, de stabilit |
 
-- Pinout-ul display-ului a fost verificat fizic și este aplicat în firmware.
+- Display-ul va ocupa GPIO1..GPIO5; ordinea exactă a celor cinci semnale va fi stabilită ulterior.
+- Firmware-ul actual folosește încă SCLK=GPIO1, MOSI=GPIO2, CS=GPIO4, RST=GPIO5 și DC=GPIO12. Această configurație trebuie schimbată deoarece GPIO12 este rezervat acum butonului reverse.
+- Firmware-ul nu va fi modificat până când telecomanda este disponibilă pentru verificarea fizică a pinout-ului.
 
 Software display actual:
 
@@ -253,8 +253,7 @@ UI display planificat:
 - Avertizarea intermitentă afectează doar textul/valoarea relevantă, nu întregul display.
 - Prag avertizare baterie telecomandă: 3,7 V.
 - Prag avertizare link quality: sub 90%.
-- Dashboard-ul final de bază este implementat: PWR a fost eliminat, bateria principală este în dreapta, heading-ul este jos, iar centrul conține viteză, sateliți, LQ, baterie TX, ARM și MODE.
-- Afișarea deviației course/track hold rămâne inactivă până la implementarea butonului și logicii Guided.
+- Dashboard-ul din firmware nu are încă acest layout final: PWR este încă duplicat din throttle, bateria principală este jos, iar indicatorul inferior de course nu este implementat.
 
 ### Receptor
 
@@ -344,7 +343,7 @@ Rată și comportament telemetrie:
 - Pachetul actual are aproximativ 29 bytes payload, astfel că rata este suficientă pentru actualizare vizuală fluidă fără consum semnificativ de bandă ESP-NOW.
 - Dacă transmitter-ul nu primește telemetrie timp de 1 secundă, valorile provenite de la receiver sunt afișate ca zero: LQ, baterie principală, viteză, heading, sateliți și armed.
 - Tensiunea bateriei telecomenzii rămâne disponibilă deoarece este măsurată local pe transmitter.
-- Firmware-ul transmitter trece toate valorile remote, inclusiv `armed`, la zero după timeout-ul de telemetrie.
+- Firmware-ul actual trece deja majoritatea valorilor la zero după timeout, dar păstrează ultima stare `armed`; această diferență trebuie corectată.
 
 Link quality și avertizare:
 
@@ -392,22 +391,21 @@ Steering-ul nu va avea comandă manuală prin butoane stânga/dreapta.
 
 ### Course/Track Hold
 
-- Buton touch dedicat pe `GPIO12`.
-- Toggle-ul este implementat în firmware și este transmis prin ESP-NOW.
-- Receiver-ul îl mapează pe RCIN4: 1000 us OFF și 2000 us ON.
+- Buton touch dedicat pe `GPIO11`.
+- Firmware-ul actual folosește GPIO11 pentru citirea planificată a bateriei telecomenzii; măsurarea bateriei trebuie mutată pe alt pin ADC înainte de implementarea butonului.
 - La activare, steering-ul din înclinarea telecomenzii este ignorat și ArduRover menține traseul GPS memorat.
 - A doua apăsare dezactivează funcția și revine la steering prin înclinare.
 
 ### Arm / Disarm
 
-- Buton TTP223 dedicat pe `GPIO10`.
+- Buton TTP223 dedicat pe `GPIO9`.
 - ARM necesită long press de 2 secunde pentru a evita armarea accidentală.
 - DISARM se execută imediat la o atingere scurtă.
 - Firmware-ul actual face toggle la o atingere scurtă; long press nu este încă implementat.
 
 ### Cruise Control
 
-- Buton TTP223 dedicat pe `GPIO9`.
+- Buton TTP223 dedicat pe `GPIO10`.
 - Prima apăsare memorează throttle-ul curent, iar a doua apăsare dezactivează cruise.
 - Cruise se dezactivează automat la reverse, DISARM sau pierderea legăturii wireless.
 - Mișcarea/apăsarea triggerului nu dezactivează cruise.
@@ -415,24 +413,23 @@ Steering-ul nu va avea comandă manuală prin butoane stânga/dreapta.
 
 ### Reverse
 
-- Reverse este comandat prin toggle de la butonul touch conectat la `GPIO11`.
+- Reverse va fi comandat prin toggle de la butonul touch conectat la `GPIO12`.
 - Activarea reverse trebuie să anuleze imediat cruise control.
 - Reverse poate fi activat numai când triggerul este la 0%.
 - După activare, triggerul controlează intrarea fizică reverse separată a ESC-ului, iar ieșirea forward rămâne la zero.
 - La dezactivarea reverse, triggerul revine la controlul intrării forward, cu trecere obligatorie prin zero.
 - La orice schimbare între forward și reverse, triggerul trebuie să rămână la 0% continuu timp de minimum 1 secundă înainte ca schimbarea de sens să fie acceptată.
 - În ArduPilot, RC1 reverse va fi rutat către PWM1, RC2 forward către PWM2, iar RC3 steering către PWM3 și PWM4.
-- Telecomanda și receiver-ul implementează deja separarea comenzilor forward/reverse și maparea RCIN; configurarea RCOUT rămâne în ArduPilot.
 
 ## Butoane Capacitive Touch
 
 - Se folosesc module externe TTP223, nu perifericul touch intern al ESP32-S3.
 - Motivul alegerii este eliminarea deschiderilor mecanice din carcasa waterproof.
 - Modulele sunt folosite momentary active-high; toggle-ul și long press-ul sunt procesate în firmware.
-- GPIO9: SPEED HOLD / cruise control local.
-- GPIO10: ARM/DISARM.
-- GPIO11: reverse.
-- GPIO12: course/track hold.
+- GPIO9: ARM/DISARM.
+- GPIO10: cruise control.
+- GPIO11: course/track hold.
+- GPIO12: reverse.
 - Sunt patru butoane capacitive în total.
 - Sunt necesare teste prin carcasa finală, cu mâini ude și cu apă pe suprafață, pentru sensibilitate și false touch.
 
@@ -454,19 +451,18 @@ Status software curent:
 - Throttle-ul este citit live din senzorul Hall 49E/AH49E pe `GPIO6`.
 - Steering-ul este citit live din MPU-9250/6500/9255 folosind orientarea calculată din axele Y/Z ale accelerometrului.
 - MPU-ul folosește I2C pe `GPIO7` SDA și `GPIO8` SCL, cu `AD0` la GND pentru adresa `0x68`.
-- Butonul ARM TTP223 este pe `GPIO10`; firmware-ul implementează long press 2 secunde pentru ARM și DISARM imediat la apăsare.
-- Butonul SPEED HOLD TTP223 este pe `GPIO9`, momentary active-high, cu toggle cruise control local în firmware.
-- Butonul reverse este pe `GPIO11`, iar butonul course/track hold pe `GPIO12`; ambele sunt implementate în transmitter și protocolul ESP-NOW.
+- Butonul ARM TTP223 este pe `GPIO9`; firmware-ul actual face toggle la apăsare, iar cerința finală este long press 2 secunde pentru ARM și apăsare scurtă pentru DISARM.
+- Butonul Cruise TTP223 este pregătit pe `GPIO10`, momentary active-high, cu toggle cruise control în firmware.
+- Butoanele course/track hold și reverse sunt montate pe `GPIO11`, respectiv `GPIO12`, dar nu sunt încă implementate în firmware.
 - Power on/off pentru telecomandă se face prin mufa MT30 cu jumper dedicat de funcționare.
-- Citirea bateriei telecomenzii este mutată software pe `GPIO13`, dar rămâne dezactivată până la cablarea și calibrarea divizorului.
-- SPEED HOLD ține throttle-ul comandat curent până la următoarea apăsare și este anulat la reverse sau failsafe local.
+- Citirea bateriei telecomenzii este implementată software momentan pe `GPIO11`, dar nu este cablată și trebuie mutată pe alt pin ADC deoarece GPIO11 este rezervat butonului course/track hold.
+- Pentru versiunea finală este rezervat `GPIO13` pentru divizorul ADC al bateriei telecomenzii; schimbarea nu se face încă în firmware.
+- Cruise control tine throttle-ul comandat curent pana la urmatoarea apasare.
 - Throttle-ul trimis spre receiver este mapat software: `0%` ramane `0%`, iar valori peste deadband sunt mapate la `15..100%`; motorul incepe fizic sa se invarta de la aproximativ `20%`, deci ramane putin deadzone.
-- Transmitter-ul trimite prin ESP-NOW: forward throttle, reverse throttle, steering, ARM/DISARM, SPEED HOLD, COURSE HOLD și starea reverse.
-- Receiver-ul trimite înapoi telemetrie prin ESP-NOW: armed real din FC, speed, heading, sateliți, baterie și link quality. Câmpul RSSI rămâne neutilizat.
+- Transmitter-ul trimite control catre receiver prin ESP-NOW: throttle, steering, arm toggle, mode placeholder.
+- Receiver-ul trimite inapoi telemetrie prin ESP-NOW: armed real din FC, speed, heading, sateliti, baterie, link quality, RSSI.
 - Receiver-ul trimite catre FC MAVLink heartbeat, RC override si command long pentru arm/disarm.
-- Failsafe receiver: după 500 ms fără control, RCIN1/RCIN2 devin `1000`, RCIN3 devine `1500`, RCIN4 devine `1000` și este trimisă comanda MAVLink DISARM o singură dată.
-- La reconectare, receiver-ul sincronizează contorul ARM fără să repete cererea veche; este necesară o nouă comandă ARM.
-- Atât transmitter-ul, cât și receiver-ul solicită puterea Wi-Fi maximă suportată de configurația curentă: 19,5 dBm.
+- Failsafe receiver: daca nu primeste control >500 ms, throttle `1000`, steering `1500`.
 - Receiver-ul activ din `src/receiver/main.cpp` este codul MAVLink/UART către FC.
 - Vechiul test ESP-NOW RTT + dashboard web este în `backup/receiver_espnow_rtt_dashboard.cpp`.
 - Backup-ul testerului Hall este în `backup/hall_sensor_test.cpp`.
@@ -497,25 +493,14 @@ Board target curent:
 - `esp32-s3-devkitm-1`
 - Flash size configurat la 4 MB.
 
-## TODO După Maparea GPIO
-
-- Montarea divizorului bateriei telecomenzii pe GPIO13 și activarea `TX_BATTERY_MONITOR_ENABLED`.
-- Adăugarea divizorului pentru bateria principală pe un ADC liber al ESP32 receiver și trimiterea tensiunii prin telemetrie.
-- Configurarea în ArduPilot a RCIN1 reverse, RCIN2 forward, RCIN3 steering și RCIN4 course hold.
-- Configurarea RCOUT/PWM1 reverse, PWM2 forward și PWM3/PWM4 pentru cele două servouri.
-- Validarea mecanică și electrică a mapării fără elice.
-- Testarea funcției course hold în ArduPilot.
-- Testarea controlată a reverse-ului; logica din ESP este implementată, dar ESC-ul nu a fost testat în reverse.
-- Upgrade ulterior la vESC pentru măsurarea directă a curentului și tensiunii și pentru limitarea configurabilă a motorului.
-
 ## Plan Pe Termen Scurt
 
 1. Montarea pushrod-urilor și finalizarea linkage-urilor celor două servouri către ductul mobil.
 2. Testarea separată a servourilor prin PWM3/PWM4, fără pornirea motorului.
 3. Verificarea centrării mecanice, cursei de `+/-30 grade` și a sensului ambelor servouri.
 4. Testarea centrării la failsafe și DISARM.
-5. Configurarea și verificarea RCIN/RCOUT în ArduPilot conform documentului de mapare.
-6. Verificarea celor patru butoane finale și a comenzilor RCIN în Mission Planner.
+5. Verificarea fizică a pinout-ului telecomenzii înaintea oricărei modificări de firmware.
+6. Implementarea celor patru butoane finale, a mapării RC1/RC2/RC3 și a condițiilor complete de ARM/DISARM.
 7. Testarea reverse-ului inițial fără elice și cu tranziția obligatorie prin zero.
 8. Testarea ansamblului motor, duct și steering într-un mediu controlat.
 9. Finalizarea și verificarea etanșării carcaselor.

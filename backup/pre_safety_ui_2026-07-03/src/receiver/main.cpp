@@ -9,16 +9,13 @@
 #define FC_RX_PIN 2
 #define FC_TX_PIN 1
 
-constexpr uint16_t CONTROL_FAILSAFE_MS = 500;
-constexpr int8_t WIFI_MAX_TX_POWER = 78; // 19.5 dBm in 0.25 dBm units.
-
 HardwareSerial fcSerial(1);
 
-// RCIN trimise catre ArduPilot prin RC_CHANNELS_OVERRIDE.
-uint16_t ch_reverse = 1000;    // RCIN1
-uint16_t ch_forward = 1000;    // RCIN2
-uint16_t ch_steering = 1500;   // RCIN3
-uint16_t ch_courseHold = 1000; // RCIN4: 1000 off, 2000 on
+// Valori channels RC (1000-2000us)
+uint16_t ch_throttle = 1000;
+uint16_t ch_steering = 1500;
+uint16_t ch_arm      = 1000;
+uint16_t ch_mode     = 1000;
 
 unsigned long lastRCOverride    = 0;
 unsigned long lastHeartbeat     = 0;
@@ -39,8 +36,6 @@ uint16_t rxControlSeq = 0;
 uint16_t txTelemetrySeq = 0;
 uint8_t lastArmToggleCount = 0;
 bool lastArmRequested = false;
-bool controlFailsafeActive = false;
-bool hasReceivedControl = false;
 uint32_t controlPackets = 0;
 uint32_t missedPackets = 0;
 int lastRssi = 0;
@@ -88,16 +83,9 @@ void loop() {
   // Citeste telemetrie de la FC
   receiveTelemetry();
 
-  if (hasReceivedControl && millis() - lastControlPacket > CONTROL_FAILSAFE_MS &&
-      !controlFailsafeActive) {
-    ch_reverse = 1000;
-    ch_forward = 1000;
+  if (millis() - lastControlPacket > 500) {
+    ch_throttle = 1000;
     ch_steering = 1500;
-    ch_courseHold = 1000;
-    lastArmRequested = false;
-    controlFailsafeActive = true;
-    sendArmCommand(false);
-    Serial.println("CONTROL FAILSAFE: neutral + DISARM");
   }
 
   if (millis() - lastEspNowTelemetry >= 100) {
@@ -142,11 +130,11 @@ void sendRCOverride() {
     &msg,
     1,    // target system (FC)
     1,    // target component
-    ch_reverse,    // RCIN1: reverse throttle
-    ch_forward,    // RCIN2: forward throttle
-    ch_steering,   // RCIN3: steering
-    ch_courseHold, // RCIN4: course hold switch
-    1000,          // RCIN5: nefolosit
+    ch_throttle,  // ch1
+    ch_steering,  // ch2
+    1500,         // ch3
+    ch_arm,       // ch4  
+    ch_mode,      // ch5
     1500,         // ch6
     1500,         // ch7
     1500,         // ch8
@@ -182,7 +170,6 @@ void initEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
-  const esp_err_t powerResult = esp_wifi_set_max_tx_power(WIFI_MAX_TX_POWER);
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init FAIL");
@@ -190,8 +177,6 @@ void initEspNow() {
   }
 
   esp_now_register_recv_cb(onControlRecv);
-  Serial.printf("WiFi TX power: %s (requested 19.5 dBm)\n",
-                powerResult == ESP_OK ? "OK" : "FAIL");
   Serial.print("Receiver ESP-NOW MAC: ");
   Serial.println(WiFi.macAddress());
 }
@@ -221,8 +206,6 @@ void onControlRecv(const uint8_t *mac, const uint8_t *data, int len) {
                   txMac[0], txMac[1], txMac[2], txMac[3], txMac[4], txMac[5]);
   }
 
-  const bool syncAfterFailsafe = !hasReceivedControl || controlFailsafeActive;
-
   lastRssi = 0;
   if (controlPackets > 0 && pkt.seq != static_cast<uint16_t>(rxControlSeq + 1)) {
     missedPackets++;
@@ -230,27 +213,9 @@ void onControlRecv(const uint8_t *mac, const uint8_t *data, int len) {
   rxControlSeq = pkt.seq;
   controlPackets++;
   lastControlPacket = millis();
-  hasReceivedControl = true;
 
-  uint8_t reverseThrottle = pkt.reverseThrottle;
-  uint8_t forwardThrottle = pkt.forwardThrottle;
-  if (reverseThrottle > 0 && forwardThrottle > 0) {
-    reverseThrottle = 0;
-    forwardThrottle = 0;
-  }
-
-  ch_reverse = mapThrottleToPwm(reverseThrottle);
-  ch_forward = mapThrottleToPwm(forwardThrottle);
+  ch_throttle = mapThrottleToPwm(pkt.throttle);
   ch_steering = mapSteeringToPwm(pkt.steering);
-  ch_courseHold =
-      (pkt.flags & CONTROL_FLAG_COURSE_HOLD_ACTIVE) != 0 ? 2000 : 1000;
-
-  if (syncAfterFailsafe) {
-    lastArmToggleCount = pkt.armToggleCount;
-    lastArmRequested = false;
-    controlFailsafeActive = false;
-    return;
-  }
 
   if (pkt.armToggleCount != lastArmToggleCount) {
     lastArmToggleCount = pkt.armToggleCount;
@@ -338,8 +303,6 @@ void receiveTelemetry() {
 void printTelemetry() {
   Serial.println("--- Telemetrie ---");
   Serial.print("Armed: ");       Serial.println(armed ? "DA" : "NU");
-  Serial.printf("RCIN1 REV:%u RCIN2 FWD:%u RCIN3 STR:%u RCIN4 CRS:%u\n",
-                ch_reverse, ch_forward, ch_steering, ch_courseHold);
   Serial.print("Speed: ");       Serial.print(gps_speed); Serial.println(" m/s");
   Serial.print("Heading: ");     Serial.println(gps_heading);
   Serial.print("Satellites: ");  Serial.println(gps_satellites);

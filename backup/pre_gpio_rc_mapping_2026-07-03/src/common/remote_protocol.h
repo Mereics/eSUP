@@ -13,19 +13,16 @@ enum PacketType : uint8_t {
 constexpr uint8_t CONTROL_FLAG_IMU_OK = 0x01;
 constexpr uint8_t CONTROL_FLAG_ARM_REQUESTED = 0x02;
 constexpr uint8_t CONTROL_FLAG_CRUISE_ACTIVE = 0x04;
-constexpr uint8_t CONTROL_FLAG_COURSE_HOLD_ACTIVE = 0x08;
-constexpr uint8_t CONTROL_FLAG_REVERSE_ACTIVE = 0x10;
 
 struct RemoteControlPacket {
   uint32_t magic;
   uint8_t type;
   uint16_t seq;
   uint32_t txMillis;
-  uint8_t forwardThrottle; // 0..100, RCIN2
-  uint8_t reverseThrottle; // 0..100, RCIN1
-  int8_t steering;         // -100..100, RCIN3
-  uint8_t armToggleCount;  // incrementat la fiecare comanda ARM/DISARM
-  uint8_t mode;            // rezervat
+  uint8_t throttle;       // 0..100
+  int8_t steering;        // -100..100
+  uint8_t armToggleCount; // incrementat la fiecare apasare ARM
+  uint8_t mode;           // 0 manual, 1 sport, rezervat
   uint8_t flags;
 } __attribute__((packed));
 
