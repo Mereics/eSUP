@@ -380,7 +380,7 @@ Failsafe GPS:
 - Calibrarea poziției eliberate se face automat la fiecare pornire; triggerul trebuie să rămână eliberat în timpul secvenței de boot.
 - Valorile negative față de poziția de repaus sunt limitate la `0%`.
 - Procesarea include mediere ADC, filtrare, deadzone și mapare la comanda transmisă prin ESP-NOW/MAVLink.
-- Parametrii actuali rămân cei implementați: deadzone de intrare 2%, apoi mapare la comanda motorului `15..100%`.
+- În repaus comanda rămâne strict `0%`. După filtrul brut de zgomot al senzorului Hall, întreaga cursă utilă este mapată liniar la comanda motorului `15..100%`, fără un deadzone procentual suplimentar.
 
 ### Steering
 
@@ -460,7 +460,7 @@ Status software curent:
 - Power on/off pentru telecomandă se face prin mufa MT30 cu jumper dedicat de funcționare.
 - Citirea bateriei telecomenzii este mutată software pe `GPIO13`, dar rămâne dezactivată până la cablarea și calibrarea divizorului.
 - SPEED HOLD ține throttle-ul comandat curent până la următoarea apăsare și este anulat la reverse sau failsafe local.
-- Throttle-ul trimis spre receiver este mapat software: `0%` ramane `0%`, iar valori peste deadband sunt mapate la `15..100%`; motorul incepe fizic sa se invarta de la aproximativ `20%`, deci ramane putin deadzone.
+- Throttle-ul trimis spre receiver este mapat software: repausul rămâne strict `0%`, iar întreaga cursă activă a triggerului este mapată la `15..100%`. Motorul începe fizic să se rotească în jurul comenzii de `20%`; intervalul `15..20%` rămâne o rezervă electrică mică, nu un deadzone introdus în cursa senzorului.
 - Transmitter-ul trimite prin ESP-NOW: forward throttle, reverse throttle, steering, ARM/DISARM, SPEED HOLD, COURSE HOLD și starea reverse.
 - Receiver-ul trimite înapoi telemetrie prin ESP-NOW: armed real din FC, speed, heading, sateliți, baterie și link quality. Câmpul RSSI rămâne neutilizat.
 - Receiver-ul trimite catre FC MAVLink heartbeat, RC override si command long pentru arm/disarm.

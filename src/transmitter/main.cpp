@@ -25,7 +25,6 @@ constexpr uint16_t HALL_BOOT_CALIBRATION_MS = 700;
 constexpr uint16_t HALL_MIN_SPAN_RAW = 700;
 constexpr uint16_t HALL_NOISE_DEADBAND_RAW = 25;
 constexpr uint16_t HALL_START_LEARN_THRESHOLD_RAW = 80;
-constexpr uint8_t THROTTLE_INPUT_DEADBAND_PERCENT = 2;
 constexpr uint8_t MOTOR_START_PERCENT = 15;
 constexpr float BATTERY_DIVIDER_RATIO = 2.0f;
 constexpr uint16_t BATTERY_SAMPLE_INTERVAL_MS = 250;
@@ -215,13 +214,12 @@ void updateThrottle() {
 }
 
 uint8_t motorMappedThrottle(uint8_t inputPercent) {
-  if (inputPercent <= THROTTLE_INPUT_DEADBAND_PERCENT) {
+  if (inputPercent == 0) {
     return 0;
   }
 
   return static_cast<uint8_t>(
-      map(inputPercent, THROTTLE_INPUT_DEADBAND_PERCENT, 100,
-          MOTOR_START_PERCENT, 100));
+      map(inputPercent, 0, 100, MOTOR_START_PERCENT, 100));
 }
 
 void updateThrottleCommand() {
@@ -582,7 +580,7 @@ bool touchPressed(int pin, bool &lastReading, bool &stableState,
 }
 
 void updateThrottleNeutralState(uint32_t now) {
-  if (throttlePercent <= THROTTLE_INPUT_DEADBAND_PERCENT) {
+  if (throttlePercent == 0) {
     if (throttleNeutralSinceMs == 0) {
       throttleNeutralSinceMs = now;
     }
@@ -948,6 +946,7 @@ void drawDashboard() {
   const uint16_t heading = linkActive ? static_cast<uint16_t>(telemetryHeading + 0.5f) : 0;
   const float mainVoltage = linkActive ? telemetryBatteryVoltage : 0.0f;
   const char *flightMode = currentModeLabel();
+  const uint8_t displayedThrottle = throttleCommandPercent;
 
   canvas.fillScreen(bg);
   canvas.fillCircle(DISPLAY_CX, DISPLAY_CY, 108, rgb(3, 7, 10));
@@ -955,7 +954,7 @@ void drawDashboard() {
   canvas.drawCircle(DISPLAY_CX, DISPLAY_CY, 111, rgb(20, 32, 38));
 
   drawTurnGauge(steeringPercent);
-  drawArcGauge(thrStart, thrEnd, throttleCommandPercent, green);
+  drawArcGauge(thrStart, thrEnd, displayedThrottle, green);
   drawArcGauge(batStart, batEnd, mainBattery, batteryColor(mainBattery));
   drawHeadingGauge(heading, courseHoldActive, courseTargetHeading);
 
@@ -967,7 +966,7 @@ void drawDashboard() {
   canvas.setTextSize(1);
   canvas.setTextColor(textMain, bg);
   canvas.setCursor(34, 130);
-  canvas.printf("%u%%", throttleCommandPercent);
+  canvas.printf("%u%%", displayedThrottle);
   const bool mainBatteryWarning =
       linkActive && mainVoltage > 1.0f && mainVoltage <= 25.6f;
   if (!mainBatteryWarning || blinkOn) {

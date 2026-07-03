@@ -37,8 +37,8 @@ Toate modulele telecomenzii folosesc masă comună.
 ### Throttle
 
 - Triggerul Hall produce `0..100%`.
-- Sub deadzone comanda este 0%.
-- Peste deadzone comanda este mapată la intervalul motorului `15..100%`.
+- În repaus, comanda este strict `0%`.
+- După depășirea filtrului brut de zgomot al senzorului Hall, întreaga cursă utilă a triggerului este mapată liniar la intervalul ESC `15..100%`. Nu mai există un deadzone procentual suplimentar la începutul cursei.
 - În forward, valoarea este pusă în `forwardThrottle`, iar `reverseThrottle` este zero.
 - În reverse, valoarea este pusă în `reverseThrottle`, iar `forwardThrottle` este zero.
 - Cele două comenzi nu pot fi nenule simultan.
